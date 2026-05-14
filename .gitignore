@@ -1,0 +1,19 @@
+# Build output
+.build/
+*.app/
+*.dSYM/
+
+# Local ffmpeg binaries (too large / architecture-specific)
+bin/
+
+# Fonts — commercial licenses, not redistributable
+# Purchase Sofia Pro from mostardesign.com and Bello Pro from underware.nl
+# then place .otf files in Resources/Fonts/
+Resources/Fonts/
+
+# macOS noise
+.DS_Store
+*.xcuserstate
+
+# Swift PM
+.swiftpm/
