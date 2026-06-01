@@ -84,27 +84,40 @@ struct StreamConfigCard: View {
                     }
                 }
 
-                labeled("Fallback slate (optional)") {
-                    HStack(spacing: 8) {
-                        Button("Choose…") { pickFallback() }
-                            .buttonStyle(.bordered)
-                        if config.fallbackMediaPath.isEmpty {
-                            Text("Shown on-air if the input drops")
-                                .font(.custom("SofiaPro", size: 11))
-                                .foregroundStyle(Color.white.opacity(0.3))
-                        } else {
-                            Text(URL(fileURLWithPath: config.fallbackMediaPath).lastPathComponent)
-                                .font(.custom("SofiaPro", size: 11))
-                                .foregroundStyle(Color.white.opacity(0.55))
-                                .lineLimit(1).truncationMode(.middle)
-                                .help(config.fallbackMediaPath)
-                            Button {
-                                config.fallbackMediaPath = ""
-                            } label: { Image(systemName: "xmark.circle.fill") }
-                                .buttonStyle(.plain)
-                                .foregroundStyle(Color.white.opacity(0.3))
+                Toggle(isOn: $config.fallbackEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Fallback on input loss")
+                            .font(.custom("SofiaPro", size: 12))
+                            .foregroundStyle(.white)
+                        Text("Holds the most recent frame on-air if the input drops, so viewers see recent content instead of black.")
+                            .font(.custom("SofiaPro", size: 10))
+                            .foregroundStyle(Color.white.opacity(0.4))
+                    }
+                }
+
+                if config.fallbackEnabled {
+                    labeled("Custom card (optional — overrides the recent frame)") {
+                        HStack(spacing: 8) {
+                            Button("Choose…") { pickFallback() }
+                                .buttonStyle(.bordered)
+                            if config.fallbackMediaPath.isEmpty {
+                                Text("Using most recent frame")
+                                    .font(.custom("SofiaPro", size: 11))
+                                    .foregroundStyle(Color.white.opacity(0.3))
+                            } else {
+                                Text(URL(fileURLWithPath: config.fallbackMediaPath).lastPathComponent)
+                                    .font(.custom("SofiaPro", size: 11))
+                                    .foregroundStyle(Color.white.opacity(0.55))
+                                    .lineLimit(1).truncationMode(.middle)
+                                    .help(config.fallbackMediaPath)
+                                Button {
+                                    config.fallbackMediaPath = ""
+                                } label: { Image(systemName: "xmark.circle.fill") }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(Color.white.opacity(0.3))
+                            }
+                            Spacer()
                         }
-                        Spacer()
                     }
                 }
 

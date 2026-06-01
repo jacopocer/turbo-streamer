@@ -90,12 +90,45 @@ struct StreamConfig: Identifiable, Codable {
     // Failsafe options
     var backupRTMPURL: String         = ""    // full backup destination (url/key); empty = none
     var safetyRecording: Bool         = false // record program to disk while streaming
-    var fallbackMediaPath: String     = ""    // image/video shown on-air when the input dies; empty = none
+    var fallbackEnabled: Bool         = false // show a fallback on-air when the input dies
+    var fallbackMediaPath: String     = ""    // optional custom card; empty = use most recent captured frame
     var adaptiveBitrate: Bool         = false // step bitrate down on instability, back up when stable
 
     init(index: Int = 1) {
         self.id   = UUID()
         self.name = "Stream \(index)"
+    }
+
+    // Resilient decoding: missing keys fall back to defaults, so adding fields
+    // in future versions never wipes previously-saved configs.
+    enum CodingKeys: String, CodingKey {
+        case id, name, rtmpPreset, rtmpURL, streamKey, videoBitrate, audioBitrate, fps,
+             resolution, inputType, filePath, videoDeviceIndex, audioDeviceIndex,
+             deckLinkDeviceName, backupRTMPURL, safetyRecording, fallbackEnabled,
+             fallbackMediaPath, adaptiveBitrate
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id                 = (try? c.decode(UUID.self,            forKey: .id)) ?? UUID()
+        name               = (try? c.decode(String.self,          forKey: .name)) ?? "Stream"
+        rtmpPreset         = (try? c.decode(RTMPPreset.self,      forKey: .rtmpPreset)) ?? .mux
+        rtmpURL            = (try? c.decode(String.self,          forKey: .rtmpURL)) ?? RTMPPreset.mux.defaultURL
+        streamKey          = (try? c.decode(String.self,          forKey: .streamKey)) ?? ""
+        videoBitrate       = (try? c.decode(String.self,          forKey: .videoBitrate)) ?? "5872k"
+        audioBitrate       = (try? c.decode(String.self,          forKey: .audioBitrate)) ?? "128k"
+        fps                = (try? c.decode(String.self,          forKey: .fps)) ?? "25"
+        resolution         = (try? c.decode(ResolutionPreset.self, forKey: .resolution)) ?? .hd
+        inputType          = (try? c.decode(InputType.self,       forKey: .inputType)) ?? .file
+        filePath           = (try? c.decode(String.self,          forKey: .filePath)) ?? ""
+        videoDeviceIndex   = (try? c.decode(String.self,          forKey: .videoDeviceIndex)) ?? "0"
+        audioDeviceIndex   = (try? c.decode(String.self,          forKey: .audioDeviceIndex)) ?? ""
+        deckLinkDeviceName = (try? c.decode(String.self,          forKey: .deckLinkDeviceName)) ?? ""
+        backupRTMPURL      = (try? c.decode(String.self,          forKey: .backupRTMPURL)) ?? ""
+        safetyRecording    = (try? c.decode(Bool.self,            forKey: .safetyRecording)) ?? false
+        fallbackEnabled    = (try? c.decode(Bool.self,            forKey: .fallbackEnabled)) ?? false
+        fallbackMediaPath  = (try? c.decode(String.self,          forKey: .fallbackMediaPath)) ?? ""
+        adaptiveBitrate    = (try? c.decode(Bool.self,            forKey: .adaptiveBitrate)) ?? false
     }
 }
 
