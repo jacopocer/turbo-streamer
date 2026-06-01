@@ -4,6 +4,52 @@ A native macOS app for streaming video files and capture cards to RTMP endpoints
 
 ---
 
+## Status — where we're at
+
+A native macOS SwiftUI shell that orchestrates **bundled ffmpeg** subprocesses. Feature-complete and reliability-hardened for a *simple, dependable* multi-stream RTMP streamer. The architecture (app orchestrates, ffmpeg does the work in isolated processes) means a streaming failure restarts ffmpeg, not the app.
+
+### Core capabilities
+
+| Area | Status | Notes |
+|---|---|---|
+| Multi-stream | ✅ | 1–8 simultaneous RTMP streams |
+| UI | ✅ | Two tabs — **Configure** (build streams while others run) + **Live** (monitor) |
+| Inputs | ✅ | File loop · Capture card (AVFoundation) · **Blackmagic DeckLink** |
+| Destinations | ✅ | Mux / YouTube / Vimeo presets + Custom; RTMP **and RTMPS** |
+| Encoder | ✅ | **Auto** — libx264 (≤1080p) / VideoToolbox (4K). No toggle to get wrong |
+| Bitrate | ✅ | Auto-fills per resolution (1080p 5872k, 4K 16000k) |
+| Settings | ✅ | Persist across launches; resilient decode (updates won't wipe them) |
+| Live metrics | ✅ | Uptime · fps · bitrate · speed per stream |
+| Branding | ✅ | Dark theme, Sofia Pro + Bello Pro fonts; health-reactive wobbling icon |
+
+### Failsafe / reliability
+
+| Feature | Default | What it does |
+|---|---|---|
+| Auto-reconnect + backoff | always on | 1→2→4→8→15s, resets after a healthy run |
+| Hang watchdog | always on | No frames 10s → restart + re-acquire device |
+| Freeze / black detection | always on | Warns when feed freezes or goes black |
+| Pre-flight check | always on | Verifies destination reachable before air |
+| Audible alerts | always on | Chimes on disconnect / recover / freeze |
+| Graceful shutdown | always on | SIGTERM→SIGKILL escalation; clean file finalize |
+| Power assertion | always on | Blocks idle-sleep while live; warns on lid-close sleep |
+| Recent-frame fallback | opt-in | Holds last good frame on-air if input drops |
+| Backup RTMP | opt-in | Second ingest via `tee` (failure can't kill primary) |
+| Safety recording | opt-in | Records `.ts` to disk while streaming (crash-survivable) |
+| Adaptive bitrate | opt-in | Drops bitrate on instability, steps back up |
+
+### Known limitations
+
+| Caveat | Detail |
+|---|---|
+| Fallback has a ~1–2s cut | True zero-gap needs a compositor (out of scope) |
+| 4K output | Only if your platform accepts 4K live ingest |
+| DeckLink driver | Needs Blackmagic Desktop Video **16.0+** (matches bundled SDK) |
+| Sharing to other Macs | Ad-hoc signed → Gatekeeper friction; true plug-and-play needs **Developer ID + notarization** |
+| Intel | Use `build_universal.sh` (one-time x86 Homebrew setup) |
+
+---
+
 ## What it is
 
 Turbo Streamer is a lightweight SwiftUI app that wraps ffmpeg in a clean, dark-themed GUI. It lets non-technical operators start and monitor one or more RTMP streams — looping a video file or reading from a capture card — without ever opening a terminal.
