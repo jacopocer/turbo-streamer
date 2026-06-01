@@ -360,6 +360,8 @@ final class StreamManager: ObservableObject {
 
         args += ["-vf", config.resolution.scaleFilter, "-r", config.fps]
 
+        let isLiveInput = config.inputType != .file
+
         if config.useHardwareEncoding {
             args += [
                 "-c:v", "h264_videotoolbox",
@@ -367,6 +369,12 @@ final class StreamManager: ObservableObject {
                 "-b:v", config.videoBitrate,
                 "-g",   "\(fpsInt * 2)"
             ]
+            if isLiveInput {
+                // Live capture (camera / DeckLink): tell VideoToolbox to encode in
+                // real time with no frame reordering, so it keeps draining the device
+                // buffer. Without this it buffers/reorders and the input overruns.
+                args += ["-realtime", "1", "-prio_speed", "1", "-bf", "0"]
+            }
         } else {
             args += [
                 "-c:v", "libx264", "-preset", "veryfast",
