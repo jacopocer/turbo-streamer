@@ -53,6 +53,38 @@ struct StreamConfigCard: View {
 
             divider
 
+            // ── Failsafe ──────────────────────────────────────────────────────
+            sectionContent {
+                sectionHeader("Failsafe")
+
+                labeled("Backup destination (optional)") {
+                    TextField("rtmp://backup…/key", text: $config.backupRTMPURL)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                Toggle(isOn: $config.safetyRecording) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Safety recording")
+                            .font(.custom("SofiaPro", size: 12))
+                            .foregroundStyle(.white)
+                        Text("Records the program to disk while streaming (~/Documents/TurboStreamer Recordings).")
+                            .font(.custom("SofiaPro", size: 10))
+                            .foregroundStyle(Color.white.opacity(0.4))
+                    }
+                }
+
+                HStack(spacing: 4) {
+                    Image(systemName: "shield.lefthalf.filled")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.white.opacity(0.25))
+                    Text("Auto-reconnect, hang/freeze detection, and pre-flight checks are always on.")
+                        .font(.custom("SofiaPro", size: 10))
+                        .foregroundStyle(Color.white.opacity(0.3))
+                }
+            }
+
+            divider
+
             // ── Video ─────────────────────────────────────────────────────────
             sectionContent {
                 sectionHeader("Video")

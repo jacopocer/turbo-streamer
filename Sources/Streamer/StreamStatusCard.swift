@@ -35,6 +35,19 @@ struct StreamStatusCard: View {
                             .foregroundStyle(Color.white.opacity(0.3))
                     }
                     if status.phase.isActive { metricsLine }
+                    if status.phase.isActive, let warning = status.inputWarning {
+                        HStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 9))
+                            Text(warning)
+                                .font(.custom("SofiaPro-SemiBold", size: 10))
+                        }
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.14))
+                        .clipShape(Capsule())
+                    }
                 }
 
                 Spacer()
