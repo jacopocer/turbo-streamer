@@ -32,7 +32,7 @@ It was built specifically for live event production where you need to:
 - **Capture card** — reads from any AVFoundation video/audio device, picked from a live dropdown
 - **Blackmagic / DeckLink** — captures from DeckLink / UltraStudio devices (requires a DeckLink-enabled ffmpeg — see setup)
 - **Device dropdowns** — pick video/audio sources from auto-scanned lists; refresh button re-scans
-- **Hardware encoding** — uses Apple's VideoToolbox H.264 encoder for full-speed 4K
+- **Automatic encoder** — no toggle to get wrong: 1080p/vertical use libx264 (`veryfast`, `zerolatency`); 4K uses Apple's VideoToolbox hardware encoder (the only one fast enough at 2160p)
 - **Hardware decoding** — `-hwaccel videotoolbox` for ProRes and other heavy sources
 - **Auto-reconnect** — retries every 10 seconds on disconnect; stops cleanly when you say stop
 - **Log persistence** — every stream writes a timestamped log to `~/Documents/TurboStreamer Logs/`

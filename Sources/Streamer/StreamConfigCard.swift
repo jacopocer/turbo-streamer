@@ -82,17 +82,6 @@ struct StreamConfigCard: View {
                     }
                     Spacer()
                 }
-
-                Toggle(isOn: $config.useHardwareEncoding) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Hardware Encoding (VideoToolbox)")
-                            .font(.custom("SofiaPro", size: 12))
-                            .foregroundStyle(.white)
-                        Text("Recommended for 4K/ProRes. Uses Apple's hardware H.264 encoder.")
-                            .font(.custom("SofiaPro", size: 10))
-                            .foregroundStyle(Color.white.opacity(0.4))
-                    }
-                }
             }
 
             divider

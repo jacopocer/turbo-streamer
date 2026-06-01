@@ -360,21 +360,22 @@ final class StreamManager: ObservableObject {
 
         args += ["-vf", config.resolution.scaleFilter, "-r", config.fps]
 
-        let isLiveInput = config.inputType != .file
-
-        if config.useHardwareEncoding {
+        // Encoder is chosen automatically — no user toggle.
+        //  • 4K  → VideoToolbox: the only encoder fast enough at 2160p. Realtime,
+        //          no frame reordering, software fallback allowed, so it never stalls.
+        //  • ≤1080p → libx264 veryfast/zerolatency: proven, reliable, best quality,
+        //          and easily real-time on Apple Silicon.
+        if config.resolution == .uhd {
             args += [
                 "-c:v", "h264_videotoolbox",
                 "-profile:v", "high",
                 "-b:v", config.videoBitrate,
-                "-g",   "\(fpsInt * 2)"
+                "-g",   "\(fpsInt * 2)",
+                "-realtime", "1",
+                "-prio_speed", "1",
+                "-bf", "0",
+                "-allow_sw", "1"
             ]
-            if isLiveInput {
-                // Live capture (camera / DeckLink): tell VideoToolbox to encode in
-                // real time with no frame reordering, so it keeps draining the device
-                // buffer. Without this it buffers/reorders and the input overruns.
-                args += ["-realtime", "1", "-prio_speed", "1", "-bf", "0"]
-            }
         } else {
             args += [
                 "-c:v", "libx264", "-preset", "veryfast",

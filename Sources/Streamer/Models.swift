@@ -68,7 +68,6 @@ struct StreamConfig: Identifiable {
     var videoDeviceIndex: String      = "0"
     var audioDeviceIndex: String      = ""
     var deckLinkDeviceName: String    = ""   // device name as reported by ffmpeg -f decklink -list_devices
-    var useHardwareEncoding: Bool     = true
 
     init(index: Int = 1) {
         self.id   = UUID()
