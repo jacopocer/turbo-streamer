@@ -35,6 +35,9 @@ It was built specifically for live event production where you need to:
 - **Automatic encoder** — no toggle to get wrong: 1080p/vertical use libx264 (`veryfast`, `zerolatency`); 4K uses Apple's VideoToolbox hardware encoder (the only one fast enough at 2160p)
 - **Hardware decoding** — `-hwaccel videotoolbox` for ProRes and other heavy sources
 - **Auto-reconnect** — retries every 10 seconds on disconnect; stops cleanly when you say stop
+- **Remembers your setup** — stream configs persist across launches automatically
+- **Smart defaults** — bitrate auto-fills to a sensible value when you change resolution
+- **Live metrics** — uptime, fps, bitrate, and encode speed shown per stream on the Live tab
 - **Log persistence** — every stream writes a timestamped log to `~/Documents/TurboStreamer Logs/`
 - **Presets** — Mux, YouTube, Vimeo, or Custom RTMP URL
 - **Self-contained** — ffmpeg and all dylibs are bundled inside the `.app`; nothing to install

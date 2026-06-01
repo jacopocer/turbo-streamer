@@ -20,7 +20,7 @@ struct StreamStatusCard: View {
             HStack(spacing: 10) {
                 phaseIndicator
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(record.config.name)
                         .font(.custom("SofiaPro-SemiBold", size: 14))
                         .foregroundStyle(.white)
@@ -34,6 +34,7 @@ struct StreamStatusCard: View {
                             .font(.custom("SofiaPro", size: 11))
                             .foregroundStyle(Color.white.opacity(0.3))
                     }
+                    if status.phase.isActive { metricsLine }
                 }
 
                 Spacer()
@@ -102,6 +103,43 @@ struct StreamStatusCard: View {
                 .foregroundStyle(phaseColor)
                 .font(.system(size: 14, weight: .semibold))
         }
+    }
+
+    @ViewBuilder
+    private var metricsLine: some View {
+        HStack(spacing: 10) {
+            TimelineView(.periodic(from: record.startedAt, by: 1)) { context in
+                metric("timer", Self.hms(Int(context.date.timeIntervalSince(record.startedAt))))
+            }
+            if let fps = status.liveFPS, fps != "0.0" {
+                metric("speedometer", "\(fps) fps")
+            }
+            if let br = status.liveBitrate, br != "N/A" {
+                metric("antenna.radiowaves.left.and.right", br)
+            }
+            if let sp = status.liveSpeed {
+                metric("gauge.with.dots.needle.67percent", sp)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func metric(_ icon: String, _ text: String) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: icon)
+                .font(.system(size: 9))
+            Text(text)
+                .font(.custom("SofiaPro", size: 10))
+        }
+        .foregroundStyle(Color.white.opacity(0.45))
+    }
+
+    private static func hms(_ seconds: Int) -> String {
+        let s = max(0, seconds)
+        let h = s / 3600, m = (s % 3600) / 60, sec = s % 60
+        return h > 0
+            ? String(format: "%d:%02d:%02d", h, m, sec)
+            : String(format: "%02d:%02d", m, sec)
     }
 
     @ViewBuilder
