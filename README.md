@@ -29,7 +29,9 @@ It was built specifically for live event production where you need to:
 - **Multi-stream** — configure and run 1–8 independent RTMP streams simultaneously
 - **Two tabs** — Configure streams while others are already live; Live tab shows all active streams
 - **File loop** — streams a video file end-to-end on repeat (`-stream_loop -1`)
-- **Capture card** — reads from any AVFoundation video/audio device
+- **Capture card** — reads from any AVFoundation video/audio device, picked from a live dropdown
+- **Blackmagic / DeckLink** — captures from DeckLink / UltraStudio devices (requires a DeckLink-enabled ffmpeg — see setup)
+- **Device dropdowns** — pick video/audio sources from auto-scanned lists; refresh button re-scans
 - **Hardware encoding** — uses Apple's VideoToolbox H.264 encoder for full-speed 4K
 - **Hardware decoding** — `-hwaccel videotoolbox` for ProRes and other heavy sources
 - **Auto-reconnect** — retries every 10 seconds on disconnect; stops cleanly when you say stop
@@ -112,10 +114,59 @@ bash build_universal.sh
 
 ---
 
+## Blackmagic / DeckLink support (optional)
+
+The standard Homebrew ffmpeg is **not** compiled with DeckLink support, so Blackmagic
+devices (DeckLink, UltraStudio, etc.) won't appear until you build a DeckLink-enabled
+ffmpeg. A helper script automates this.
+
+### 1. Install the Desktop Video driver
+
+Install **Desktop Video** on the machine and make sure it's reasonably current:
+[blackmagicdesign.com/support](https://www.blackmagicdesign.com/support)
+
+> **Version matters.** ffmpeg refuses to open the device unless the installed driver
+> version is **≥ the SDK version it was built against**. If you build against SDK 16.0,
+> you need Desktop Video 16.0+. Match them.
+
+### 2. Download the Desktop Video SDK
+
+Grab the **Desktop Video SDK** (the developer package, *not* the driver) from
+[blackmagicdesign.com/developer/product/capture-and-playback](https://www.blackmagicdesign.com/developer/product/capture-and-playback).
+Unzip it — the headers live in `<SDK>/Mac/include`.
+
+### 3. Run the setup script
+
+```bash
+bash scripts/setup-decklink-ffmpeg.sh "/path/to/Blackmagic DeckLink SDK XX.Y/Mac/include"
+```
+
+This copies the SDK headers into Homebrew's include dir, patches in the base COM
+`IID_IUnknown` symbol (Blackmagic SDK 12+ removed it, but ffmpeg still references it),
+and rebuilds ffmpeg from the `homebrew-ffmpeg` tap with `--with-decklink`.
+
+### 4. Rebuild the app
+
+```bash
+bash build.sh      # or build_universal.sh
+```
+
+Verify it worked:
+
+```bash
+./Streamer.app/Contents/Resources/bin/ffmpeg -hide_banner -sources decklink
+```
+
+You should see your device listed. In the app, choose **Blackmagic** as the input,
+hit the refresh button, and pick the device from the dropdown.
+
+---
+
 ## Usage
 
 1. Open `Streamer.app`
 2. In the **Configure** tab, set your stream name, RTMP platform and key, resolution, bitrate, and input source
+   - For **Capture Card** or **Blackmagic**, pick the device from the dropdown; use the ↻ refresh button to re-scan if you plug something in
 3. Press **Start Streams** — streams appear in the **Live** tab
 4. Go back to Configure any time to set up additional streams while the current ones are running
 5. Use the **Stop** button per stream, or **Stop All** to kill everything
@@ -136,12 +187,14 @@ turbo-streamer/
 │   ├── ContentView.swift        # Root view with custom tab bar
 │   ├── SetupView.swift          # Configure tab
 │   ├── ActiveStreamsView.swift   # Live tab
-│   ├── StreamConfigCard.swift   # Per-stream configuration card
+│   ├── StreamConfigCard.swift   # Per-stream config card (device dropdowns)
 │   └── StreamStatusCard.swift   # Per-stream status card with live log
 ├── Resources/
 │   ├── AppIcon.icns
 │   ├── indigital-logo.png       # Header logo (not tracked, add your own)
 │   └── Fonts/                   # Not tracked — add licensed fonts here
+├── scripts/
+│   └── setup-decklink-ffmpeg.sh # Builds a DeckLink-enabled ffmpeg
 ├── Package.swift
 ├── Streamer.entitlements
 ├── build.sh                     # arm64 build

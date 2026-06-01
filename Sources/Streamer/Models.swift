@@ -3,8 +3,9 @@ import Foundation
 // MARK: - Enums
 
 enum InputType: String, CaseIterable, Identifiable {
-    case file    = "File"
-    case capture = "Capture Card"
+    case file     = "File"
+    case capture  = "Capture Card"
+    case decklink = "Blackmagic"
     var id: String { rawValue }
 }
 
@@ -66,6 +67,7 @@ struct StreamConfig: Identifiable {
     var filePath: String              = ""
     var videoDeviceIndex: String      = "0"
     var audioDeviceIndex: String      = ""
+    var deckLinkDeviceName: String    = ""   // device name as reported by ffmpeg -f decklink -list_devices
     var useHardwareEncoding: Bool     = true
 
     init(index: Int = 1) {
@@ -119,6 +121,14 @@ enum StreamPhase: Equatable {
         default:                                                          return false
         }
     }
+}
+
+// MARK: - Capture device (for dropdowns)
+
+struct CaptureDevice: Identifiable, Hashable {
+    let id = UUID()
+    let index: String   // AVFoundation device index; empty for DeckLink
+    let name: String
 }
 
 // MARK: - Running stream record (shown in Live tab)

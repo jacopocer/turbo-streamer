@@ -3,9 +3,6 @@ import AppKit
 
 struct StreamConfigCard: View {
     @Binding var config: StreamConfig
-    @State private var showDeviceSheet = false
-    @State private var deviceOutput: String = ""
-    @State private var isLoadingDevices = false
     @EnvironmentObject var manager: StreamManager
 
     var body: some View {
@@ -111,6 +108,8 @@ struct StreamConfigCard: View {
 
                 if config.inputType == .file {
                     fileInputSection
+                } else if config.inputType == .decklink {
+                    deckLinkInputSection
                 } else {
                     captureInputSection
                 }
@@ -122,10 +121,8 @@ struct StreamConfigCard: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(Color.white.opacity(0.1), lineWidth: 1)
         )
-        .sheet(isPresented: $showDeviceSheet) {
-            DeviceListSheet(output: deviceOutput, isLoading: isLoadingDevices)
-                .preferredColorScheme(.dark)
-        }
+        .onAppear { scanIfNeeded() }
+        .onChange(of: config.inputType) { _ in scanIfNeeded() }
     }
 
     // MARK: - File input
@@ -152,34 +149,87 @@ struct StreamConfigCard: View {
         }
     }
 
+    // MARK: - Blackmagic DeckLink input
+
+    @ViewBuilder
+    private var deckLinkInputSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            labeled("Device") {
+                HStack(spacing: 8) {
+                    Picker("", selection: $config.deckLinkDeviceName) {
+                        if manager.deckLinkDevices.isEmpty {
+                            Text(config.deckLinkDeviceName.isEmpty ? "No devices found" : config.deckLinkDeviceName)
+                                .tag(config.deckLinkDeviceName)
+                        }
+                        ForEach(manager.deckLinkDevices) { d in
+                            Text(d.name).tag(d.name)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 340)
+
+                    RefreshButton(isSpinning: manager.isScanningDevices) {
+                        await manager.refreshDeckLinkDevices()
+                    }
+                    Spacer()
+                }
+            }
+
+            HStack(spacing: 4) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.white.opacity(0.25))
+                Text("Audio is captured automatically with the selected device.")
+                    .font(.custom("SofiaPro", size: 10))
+                    .foregroundStyle(Color.white.opacity(0.3))
+            }
+        }
+    }
+
     // MARK: - Capture card input
 
     @ViewBuilder
     private var captureInputSection: some View {
-        HStack(spacing: 12) {
-            labeled("Video Device #") {
-                TextField("0", text: $config.videoDeviceIndex)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 50)
+        HStack(alignment: .bottom, spacing: 12) {
+            labeled("Video Device") {
+                Picker("", selection: $config.videoDeviceIndex) {
+                    if manager.avVideoDevices.isEmpty {
+                        Text("No devices").tag(config.videoDeviceIndex)
+                    }
+                    ForEach(manager.avVideoDevices) { d in
+                        Text("\(d.index) · \(d.name)").tag(d.index)
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 230)
             }
-            labeled("Audio Device # (blank = none)") {
-                TextField("1", text: $config.audioDeviceIndex)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 50)
+            labeled("Audio Device") {
+                Picker("", selection: $config.audioDeviceIndex) {
+                    Text("None").tag("")
+                    ForEach(manager.avAudioDevices) { d in
+                        Text("\(d.index) · \(d.name)").tag(d.index)
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 230)
+            }
+            RefreshButton(isSpinning: manager.isScanningDevices) {
+                await manager.refreshAVDevices()
             }
             Spacer()
-            Button {
-                Task {
-                    isLoadingDevices = true
-                    deviceOutput     = await manager.listDevices()
-                    isLoadingDevices = false
-                    showDeviceSheet  = true
-                }
-            } label: {
-                Label("List Devices", systemImage: "camera.badge.ellipsis")
-                    .font(.custom("SofiaPro", size: 12))
-            }
-            .buttonStyle(.bordered)
+        }
+    }
+
+    // MARK: - Device scanning
+
+    private func scanIfNeeded() {
+        switch config.inputType {
+        case .capture where manager.avVideoDevices.isEmpty:
+            Task { await manager.refreshAVDevices() }
+        case .decklink where manager.deckLinkDevices.isEmpty:
+            Task { await manager.refreshDeckLinkDevices() }
+        default:
+            break
         }
     }
 
@@ -236,46 +286,33 @@ struct StreamConfigCard: View {
     }
 }
 
-// MARK: - Device list sheet
+// MARK: - Animated refresh button
 
-struct DeviceListSheet: View {
-    let output: String
-    let isLoading: Bool
-    @Environment(\.dismiss) private var dismiss
+private struct RefreshButton: View {
+    let isSpinning: Bool
+    let action: () async -> Void
+    @State private var angle: Double = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Available AVFoundation Devices")
-                    .font(.custom("SofiaPro-SemiBold", size: 15))
-                    .foregroundStyle(.white)
-                Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.escape)
-            }
-
-            if isLoading {
-                ProgressView("Scanning devices…")
-                    .frame(maxWidth: .infinity, minHeight: 100)
-            } else {
-                ScrollView {
-                    Text(output.isEmpty ? "No output — is ffmpeg installed?" : output)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(Color.white.opacity(0.8))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                }
-                .frame(minHeight: 200, maxHeight: 400)
-                .background(Color.black.opacity(0.5))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-            }
-
-            Text("Use the [Video] / [Audio] numbers shown above in the device index fields.")
-                .font(.custom("SofiaPro", size: 11))
-                .foregroundStyle(Color.white.opacity(0.4))
+        Button {
+            Task { await action() }
+        } label: {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 12, weight: .semibold))
+                .rotationEffect(.degrees(angle))
         }
-        .padding(20)
-        .frame(width: 560)
-        .background(Color(red: 0.10, green: 0.10, blue: 0.10))
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .help("Refresh device list")
+        .onChange(of: isSpinning) { spinning in
+            if spinning {
+                angle = 0
+                withAnimation(.linear(duration: 0.7).repeatForever(autoreverses: false)) {
+                    angle = 360
+                }
+            } else {
+                withAnimation(.linear(duration: 0.2)) { angle = 0 }
+            }
+        }
     }
 }
