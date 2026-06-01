@@ -2,14 +2,14 @@ import Foundation
 
 // MARK: - Enums
 
-enum InputType: String, CaseIterable, Identifiable {
+enum InputType: String, CaseIterable, Identifiable, Codable {
     case file     = "File"
     case capture  = "Capture Card"
     case decklink = "Blackmagic"
     var id: String { rawValue }
 }
 
-enum ResolutionPreset: String, CaseIterable, Identifiable {
+enum ResolutionPreset: String, CaseIterable, Identifiable, Codable {
     case hd       = "1920×1080 (16:9)"
     case uhd      = "3840×2160 (4K)"
     case vertical = "1080×1920 (9:16)"
@@ -31,9 +31,18 @@ enum ResolutionPreset: String, CaseIterable, Identifiable {
         case .uhd:            return "3840x2160"
         }
     }
+
+    /// Sensible streaming bitrate for each resolution (used to auto-fill the field).
+    var defaultBitrate: String {
+        switch self {
+        case .hd:       return "5872k"
+        case .uhd:      return "16000k"   // 4K H.264 — VideoToolbox handles it
+        case .vertical: return "5872k"
+        }
+    }
 }
 
-enum RTMPPreset: String, CaseIterable, Identifiable {
+enum RTMPPreset: String, CaseIterable, Identifiable, Codable {
     case mux     = "Mux"
     case youtube = "YouTube"
     case vimeo   = "Vimeo"
@@ -53,7 +62,7 @@ enum RTMPPreset: String, CaseIterable, Identifiable {
 
 // MARK: - Stream configuration (struct so SwiftUI bindings work cleanly)
 
-struct StreamConfig: Identifiable {
+struct StreamConfig: Identifiable, Codable {
     let id: UUID
     var name: String
     var rtmpPreset: RTMPPreset        = .mux
@@ -81,6 +90,11 @@ struct StreamStatus {
     var phase: StreamPhase = .idle
     var logLines: [String] = []
 
+    // Live metrics parsed from ffmpeg progress lines
+    var liveFPS: String?
+    var liveBitrate: String?
+    var liveSpeed: String?
+
     mutating func appendLog(_ text: String) {
         let incoming = text
             .components(separatedBy: "\n")
@@ -88,6 +102,21 @@ struct StreamStatus {
             .filter { !$0.isEmpty }
         logLines.append(contentsOf: incoming)
         if logLines.count > 500 { logLines.removeFirst(logLines.count - 500) }
+
+        // Update live metrics from the most recent ffmpeg progress line
+        for line in incoming where line.contains("frame=") && line.contains("fps=") {
+            if let v = Self.value(after: "fps=",     in: line) { liveFPS     = v }
+            if let v = Self.value(after: "bitrate=", in: line) { liveBitrate = v }
+            if let v = Self.value(after: "speed=",   in: line) { liveSpeed   = v }
+        }
+    }
+
+    /// Extracts the whitespace-delimited token following `key` (e.g. "fps= 25" → "25").
+    private static func value(after key: String, in line: String) -> String? {
+        guard let r = line.range(of: key) else { return nil }
+        let rest  = line[r.upperBound...].drop(while: { $0 == " " })
+        let token = rest.prefix(while: { $0 != " " })
+        return token.isEmpty ? nil : String(token)
     }
 }
 

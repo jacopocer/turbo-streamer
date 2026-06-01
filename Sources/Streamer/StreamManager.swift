@@ -5,9 +5,13 @@ final class StreamManager: ObservableObject {
 
     // MARK: - Published state
 
-    @Published var configs: [StreamConfig]                       = [StreamConfig(index: 1)]
+    @Published var configs: [StreamConfig] = [StreamConfig(index: 1)] {
+        didSet { saveConfigs() }
+    }
     @Published private(set) var runningStreams: [RunningStreamRecord] = []
     @Published private(set) var statuses: [UUID: StreamStatus]  = [:]
+
+    private static let configsKey = "TurboStreamer.savedConfigs.v1"
 
     // Device lists (shared across all config cards)
     @Published private(set) var avVideoDevices:  [CaptureDevice] = []
@@ -33,6 +37,24 @@ final class StreamManager: ObservableObject {
         } else {
             ffmpegPath = "/usr/local/bin/ffmpeg"
         }
+
+        // Restore previously saved configs (assigning in init does not fire didSet)
+        if let saved = Self.loadConfigs(), !saved.isEmpty {
+            configs = saved
+        }
+    }
+
+    // MARK: - Config persistence
+
+    private func saveConfigs() {
+        if let data = try? JSONEncoder().encode(configs) {
+            UserDefaults.standard.set(data, forKey: Self.configsKey)
+        }
+    }
+
+    private static func loadConfigs() -> [StreamConfig]? {
+        guard let data = UserDefaults.standard.data(forKey: configsKey) else { return nil }
+        return try? JSONDecoder().decode([StreamConfig].self, from: data)
     }
 
     // MARK: - Config management

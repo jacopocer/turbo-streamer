@@ -62,6 +62,10 @@ struct StreamConfigCard: View {
                         ForEach(ResolutionPreset.allCases) { r in Text(r.rawValue).tag(r) }
                     }
                     .labelsHidden()
+                    .onChange(of: config.resolution) { newResolution in
+                        // Auto-fill a sensible bitrate for the chosen resolution
+                        config.videoBitrate = newResolution.defaultBitrate
+                    }
                 }
 
                 HStack(spacing: 12) {
