@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 @MainActor
 final class StreamManager: ObservableObject {
@@ -24,7 +25,11 @@ final class StreamManager: ObservableObject {
     private var stopFlags:      [UUID: Bool]              = [:]
     private var tasks:          [UUID: Task<Void, Never>] = [:]
     private var logFileHandles: [UUID: FileHandle]        = [:]
+    private var lastProgressAt: [UUID: Date]              = [:]
     private let registry = ProcessRegistry()
+
+    /// No video frames for this long ⇒ input is stalled/hung ⇒ force a restart.
+    private let hangTimeout: TimeInterval = 10
 
     let ffmpegPath: String
 
@@ -238,10 +243,32 @@ final class StreamManager: ObservableObject {
     // MARK: - Private: log helpers
 
     private func appendLog(_ text: String, to id: UUID) {
-        statuses[id]?.appendLog(text)
+        let prevWarning = statuses[id]?.inputWarning
+        let sawProgress = statuses[id]?.appendLog(text) ?? false
+
         if let fh = logFileHandles[id], let data = (text + "\n").data(using: .utf8) {
             fh.write(data)
         }
+
+        if sawProgress {
+            lastProgressAt[id] = Date()
+            // Frames resumed while reconnecting ⇒ we're back. Flip to live + chime.
+            if case .reconnecting = statuses[id]?.phase {
+                statuses[id]?.phase = .running
+                playAlert("Glass")
+            }
+        }
+
+        // New content warning (freeze / black) → soft chime, once per onset
+        if let warning = statuses[id]?.inputWarning, warning != prevWarning {
+            playAlert("Tink")
+        }
+    }
+
+    // MARK: - Alerts
+
+    private func playAlert(_ name: NSSound.Name) {
+        NSSound(named: name)?.play()
     }
 
     private func closeLogFile(id: UUID) {
@@ -262,7 +289,15 @@ final class StreamManager: ObservableObject {
         let id = record.id
 
         tasks[id] = Task {
+            // ── Pre-flight: is the destination reachable? (non-blocking, informational) ──
+            appendLog("⏳ Pre-flight: checking \(record.config.rtmpURL)…", to: id)
+            let reachable = await Preflight.isReachable(record.config.rtmpURL)
+            appendLog(reachable
+                ? "✓ Destination reachable."
+                : "⚠ Destination not reachable yet — will keep retrying once started.", to: id)
+
             var attempt = 0
+            var consecutiveFailures = 0
 
             while !Task.isCancelled {
                 guard stopFlags[id] == false else { break }
@@ -271,10 +306,12 @@ final class StreamManager: ObservableObject {
                 statuses[id]?.phase = attempt == 1 ? .running : .reconnecting(attempt: attempt)
                 appendLog("▶ Starting (attempt \(attempt))…", to: id)
 
+                let startedAt = Date()
+                lastProgressAt[id] = Date()
                 let exitCode = await runFFmpeg(record: record)
+                let ranFor   = Date().timeIntervalSince(startedAt)
 
-                if Task.isCancelled      { break }
-                if stopFlags[id] == true { break }
+                if Task.isCancelled || stopFlags[id] == true { break }
 
                 if exitCode == 0 {
                     appendLog("✓ Stream ended cleanly.", to: id)
@@ -282,16 +319,33 @@ final class StreamManager: ObservableObject {
                     break
                 }
 
-                appendLog("⚠ Disconnected (exit \(exitCode)) — reconnecting in 10 s…", to: id)
-                for _ in 0 ..< 10 {
+                // Failure → reconnect with exponential backoff.
+                // A run that lasted a while was healthy, so reset the backoff ladder.
+                if ranFor > 30 { consecutiveFailures = 0 } else { consecutiveFailures += 1 }
+                let delay = Self.backoffDelay(consecutiveFailures)
+
+                statuses[id]?.phase = .reconnecting(attempt: attempt + 1)
+                appendLog("⚠ Disconnected (exit \(exitCode)) — reconnecting in \(delay) s…", to: id)
+                playAlert("Basso")
+
+                var waited = 0
+                while waited < delay {
                     if Task.isCancelled || stopFlags[id] == true { break }
                     try? await Task.sleep(for: .seconds(1))
+                    waited += 1
                 }
             }
 
             if statuses[id]?.phase.isActive == true { statuses[id]?.phase = .stopped }
+            lastProgressAt[id] = nil
             closeLogFile(id: id)
         }
+    }
+
+    /// Exponential backoff ladder for reconnect delays (seconds).
+    static func backoffDelay(_ consecutiveFailures: Int) -> Int {
+        let ladder = [1, 2, 4, 8, 15]
+        return ladder[min(max(consecutiveFailures - 1, 0), ladder.count - 1)]
     }
 
     // MARK: - Private: process execution
@@ -299,7 +353,12 @@ final class StreamManager: ObservableObject {
     private func runFFmpeg(record: RunningStreamRecord) async -> Int32 {
         let id     = record.id
         let config = record.config
-        let args   = buildArgs(for: config)
+        let recordingURL = config.safetyRecording ? makeRecordingURL(for: config) : nil
+        let args   = buildArgs(for: config, recordingURL: recordingURL)
+
+        if let rec = recordingURL {
+            appendLog("● Safety recording → \(rec.path)", to: id)
+        }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ffmpegPath)
@@ -325,6 +384,23 @@ final class StreamManager: ObservableObject {
 
         registry.store(process, for: id)
 
+        // ── Hang watchdog: if no video frames arrive for `hangTimeout`, the input
+        // is stalled (capture unplugged, source frozen, RTMP stuck) — kill it so the
+        // reconnect loop relaunches and re-acquires the device.
+        let watchdog = Task { @MainActor [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                if Task.isCancelled { break }
+                let last = self.lastProgressAt[id] ?? Date()
+                if Date().timeIntervalSince(last) > self.hangTimeout {
+                    self.appendLog("⏱ No frames for \(Int(self.hangTimeout)) s — input stalled. Restarting…", to: id)
+                    self.registry.terminate(id: id)   // → terminationHandler → reconnect
+                    break
+                }
+            }
+        }
+
         return await withCheckedContinuation { continuation in
 
             pipe.fileHandleForReading.readabilityHandler = { handle in
@@ -337,6 +413,7 @@ final class StreamManager: ObservableObject {
             }
 
             process.terminationHandler = { [registry] p in
+                watchdog.cancel()
                 pipe.fileHandleForReading.readabilityHandler = nil
                 let tail = pipe.fileHandleForReading.readDataToEndOfFile()
                 if !tail.isEmpty, let text = String(data: tail, encoding: .utf8) {
@@ -351,6 +428,7 @@ final class StreamManager: ObservableObject {
             do {
                 try process.run()
             } catch {
+                watchdog.cancel()
                 registry.remove(id: id, ifMatches: process)
                 Task { @MainActor [weak self] in
                     self?.appendLog("✗ Failed to launch ffmpeg: \(error.localizedDescription)", to: id)
@@ -360,16 +438,30 @@ final class StreamManager: ObservableObject {
         }
     }
 
+    private func makeRecordingURL(for config: StreamConfig) -> URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let dir  = docs.appendingPathComponent("TurboStreamer Recordings")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let safe = config.name
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        return dir.appendingPathComponent("\(fmt.string(from: Date()))_\(safe).ts")
+    }
+
     // MARK: - Private: argument builder
 
-    private func buildArgs(for config: StreamConfig) -> [String] {
+    private func buildArgs(for config: StreamConfig, recordingURL: URL?) -> [String] {
         let bitrateNum = Int(config.videoBitrate.replacingOccurrences(of: "k", with: "")) ?? 4500
         let bufsize    = "\(bitrateNum * 2)k"
         let fpsInt     = Int(config.fps) ?? 30
         let dest       = "\(config.rtmpURL)/\(config.streamKey)"
+        let backup     = config.backupRTMPURL.trimmingCharacters(in: .whitespaces)
 
         var args: [String]
 
+        // ── Input ──────────────────────────────────────────────────────────
         if config.inputType == .file {
             args = [
                 "-hide_banner", "-loglevel", "info",
@@ -378,9 +470,6 @@ final class StreamManager: ObservableObject {
                 "-i", config.filePath
             ]
         } else if config.inputType == .decklink {
-            // Blackmagic DeckLink: device referenced by name, audio included automatically.
-            // -thread_queue_size buffers the high-bitrate live feed so it doesn't overrun
-            // while the RTMP output is still connecting.
             args = [
                 "-hide_banner", "-loglevel", "info",
                 "-f", "decklink",
@@ -399,44 +488,55 @@ final class StreamManager: ObservableObject {
             ]
         }
 
-        args += ["-vf", config.resolution.scaleFilter, "-r", config.fps]
+        // ── Video filter: scale + content detectors (freeze / black) ────────
+        let detectors   = "freezedetect=n=-60dB:d=3,blackdetect=d=3"
+        let videoFilter = "\(config.resolution.scaleFilter),\(detectors)"
 
-        // Encoder is chosen automatically — no user toggle.
-        //  • 4K  → VideoToolbox: the only encoder fast enough at 2160p. Realtime,
-        //          no frame reordering, software fallback allowed, so it never stalls.
-        //  • ≤1080p → libx264 veryfast/zerolatency: proven, reliable, best quality,
-        //          and easily real-time on Apple Silicon.
-        if config.resolution == .uhd {
-            args += [
-                "-c:v", "h264_videotoolbox",
-                "-profile:v", "high",
-                "-b:v", config.videoBitrate,
-                "-g",   "\(fpsInt * 2)",
-                "-realtime", "1",
-                "-prio_speed", "1",
-                "-bf", "0",
-                "-allow_sw", "1"
-            ]
-        } else {
-            args += [
-                "-c:v", "libx264", "-preset", "veryfast",
-                "-profile:v", "high", "-pix_fmt", "yuv420p",
-                "-b:v",    config.videoBitrate,
-                "-maxrate", config.videoBitrate,
-                "-bufsize", bufsize,
-                "-g",      "\(fpsInt * 2)",
-                "-tune",   "zerolatency"
-            ]
+        // ── Encoder (auto-selected by resolution) ───────────────────────────
+        func encoderArgs() -> [String] {
+            if config.resolution == .uhd {
+                return [
+                    "-c:v", "h264_videotoolbox", "-profile:v", "high",
+                    "-b:v", config.videoBitrate, "-g", "\(fpsInt * 2)",
+                    "-realtime", "1", "-prio_speed", "1", "-bf", "0", "-allow_sw", "1"
+                ]
+            } else {
+                return [
+                    "-c:v", "libx264", "-preset", "veryfast",
+                    "-profile:v", "high", "-pix_fmt", "yuv420p",
+                    "-b:v", config.videoBitrate, "-maxrate", config.videoBitrate,
+                    "-bufsize", bufsize, "-g", "\(fpsInt * 2)", "-tune", "zerolatency"
+                ]
+            }
         }
+        let audioArgs = ["-c:a", "aac", "-b:a", config.audioBitrate, "-ar", "48000", "-ac", "2"]
 
-        args += [
-            "-c:a", "aac",
-            "-b:a", config.audioBitrate,
-            "-ar",  "48000",
-            "-ac",  "2",
-            "-f",   "flv",
-            dest
-        ]
+        // ── Output ──────────────────────────────────────────────────────────
+        // Single destination → plain flv (the proven path).
+        // Backup destination and/or safety recording → tee (one encode, many sinks).
+        let useTee = !backup.isEmpty || recordingURL != nil
+
+        if useTee {
+            args += [
+                "-filter_complex", "[0:v]\(videoFilter),fps=\(config.fps)[v]",
+                "-map", "[v]", "-map", "0:a?"
+            ]
+            args += encoderArgs()
+            args += audioArgs
+
+            // Primary uses default onfail=abort → a primary drop ends ffmpeg and
+            // triggers our reconnect. Backup & recording use onfail=ignore so their
+            // failure never takes down the live stream.
+            var targets = ["[f=flv]\(dest)"]
+            if !backup.isEmpty            { targets.append("[f=flv:onfail=ignore]\(backup)") }
+            if let rec = recordingURL     { targets.append("[f=mpegts:onfail=ignore]\(rec.path)") }
+            args += ["-f", "tee", targets.joined(separator: "|")]
+        } else {
+            args += ["-vf", videoFilter, "-r", config.fps]
+            args += encoderArgs()
+            args += audioArgs
+            args += ["-f", "flv", dest]
+        }
 
         return args
     }

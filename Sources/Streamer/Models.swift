@@ -78,6 +78,10 @@ struct StreamConfig: Identifiable, Codable {
     var audioDeviceIndex: String      = ""
     var deckLinkDeviceName: String    = ""   // device name as reported by ffmpeg -f decklink -list_devices
 
+    // Failsafe options
+    var backupRTMPURL: String         = ""   // full backup destination (url/key); empty = none
+    var safetyRecording: Bool         = false // record program to disk while streaming
+
     init(index: Int = 1) {
         self.id   = UUID()
         self.name = "Stream \(index)"
@@ -94,8 +98,12 @@ struct StreamStatus {
     var liveFPS: String?
     var liveBitrate: String?
     var liveSpeed: String?
+    var liveDrop: String?
+    var inputWarning: String?     // "Frozen" / "Black" / nil — content issue, not a disconnect
 
-    mutating func appendLog(_ text: String) {
+    /// True if a progress line was seen in this batch (used by the hang watchdog).
+    @discardableResult
+    mutating func appendLog(_ text: String) -> Bool {
         let incoming = text
             .components(separatedBy: "\n")
             .map { $0.trimmingCharacters(in: .init(charactersIn: "\r ")) }
@@ -103,12 +111,22 @@ struct StreamStatus {
         logLines.append(contentsOf: incoming)
         if logLines.count > 500 { logLines.removeFirst(logLines.count - 500) }
 
-        // Update live metrics from the most recent ffmpeg progress line
-        for line in incoming where line.contains("frame=") && line.contains("fps=") {
-            if let v = Self.value(after: "fps=",     in: line) { liveFPS     = v }
-            if let v = Self.value(after: "bitrate=", in: line) { liveBitrate = v }
-            if let v = Self.value(after: "speed=",   in: line) { liveSpeed   = v }
+        var sawProgress = false
+        for line in incoming {
+            if line.contains("frame=") && line.contains("fps=") {
+                sawProgress = true
+                if let v = Self.value(after: "fps=",     in: line) { liveFPS     = v }
+                if let v = Self.value(after: "bitrate=", in: line) { liveBitrate = v }
+                if let v = Self.value(after: "speed=",   in: line) { liveSpeed   = v }
+                if let v = Self.value(after: "drop=",    in: line) { liveDrop    = v }
+            }
+            // Content-quality detectors (passthrough filters that only log)
+            if line.contains("freeze_start") { inputWarning = "Frozen" }
+            if line.contains("freeze_end")   { if inputWarning == "Frozen" { inputWarning = nil } }
+            if line.contains("black_start")  { inputWarning = "Black screen" }
+            if line.contains("black_end")    { if inputWarning == "Black screen" { inputWarning = nil } }
         }
+        return sawProgress
     }
 
     /// Extracts the whitespace-delimited token following `key` (e.g. "fps= 25" → "25").

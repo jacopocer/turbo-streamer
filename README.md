@@ -34,7 +34,14 @@ It was built specifically for live event production where you need to:
 - **Device dropdowns** — pick video/audio sources from auto-scanned lists; refresh button re-scans
 - **Automatic encoder** — no toggle to get wrong: 1080p/vertical use libx264 (`veryfast`, `zerolatency`); 4K uses Apple's VideoToolbox hardware encoder (the only one fast enough at 2160p)
 - **Hardware decoding** — `-hwaccel videotoolbox` for ProRes and other heavy sources
-- **Auto-reconnect** — retries every 10 seconds on disconnect; stops cleanly when you say stop
+- **Failsafe suite** — designed to survive real-world failures:
+  - **Auto-reconnect** with exponential backoff (1→2→4→8→15s), resets after a healthy run
+  - **Hang watchdog** — if frames stop for 10s (capture unplugged, source frozen, RTMP stuck), it restarts and re-acquires the device automatically
+  - **Freeze / black detection** — warns when the feed freezes or goes black even though frames technically flow
+  - **Backup RTMP destination** — push to a second ingest simultaneously (a backup failure never takes down the primary)
+  - **Safety recording** — records the program to disk (`~/Documents/TurboStreamer Recordings`) while streaming, as resilient `.ts`
+  - **Pre-flight check** — verifies the destination is reachable before going live
+  - **Audible alerts** — chimes on disconnect, recovery, and freeze/black
 - **Remembers your setup** — stream configs persist across launches automatically
 - **Smart defaults** — bitrate auto-fills to a sensible value when you change resolution
 - **Live metrics** — uptime, fps, bitrate, and encode speed shown per stream on the Live tab
