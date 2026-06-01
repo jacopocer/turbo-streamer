@@ -22,7 +22,7 @@ struct ContentView: View {
     @ViewBuilder
     private var appHeader: some View {
         HStack(spacing: 12) {
-            WobblingIcon(isActive: manager.hasActiveStreams)
+            WobblingIcon(isActive: manager.hasActiveStreams, isTroubled: manager.isTroubled)
 
             Text("Turbo Streamer")
                 .font(.custom("Bello-Pro", size: 28))
@@ -136,30 +136,40 @@ struct ContentView: View {
 
 struct WobblingIcon: View {
     let isActive: Bool
-    @State private var tilt: Double = 0
-
-    private let maxTilt: Double = 11      // degrees each side
-    private let halfPeriod = 0.5          // seconds per swing
+    let isTroubled: Bool
 
     var body: some View {
+        if isActive {
+            TimelineView(.animation) { context in
+                rocked(at: context.date.timeIntervalSinceReferenceDate)
+            }
+        } else {
+            baseIcon
+        }
+    }
+
+    private var baseIcon: some View {
         Image(nsImage: NSApplication.shared.applicationIconImage)
             .resizable()
             .interpolation(.high)
             .frame(width: 36, height: 36)
             .clipShape(RoundedRectangle(cornerRadius: 8))
-            .rotationEffect(.degrees(tilt), anchor: .bottom)
-            .onChange(of: isActive) { active in updateWobble(active) }
-            .onAppear { updateWobble(isActive) }
     }
 
-    private func updateWobble(_ active: Bool) {
-        if active {
-            tilt = -maxTilt   // start tilted left, then animate across
-            withAnimation(.easeInOut(duration: halfPeriod).repeatForever(autoreverses: true)) {
-                tilt = maxTilt
-            }
-        } else {
-            withAnimation(.easeInOut(duration: 0.25)) { tilt = 0 }
-        }
+    @ViewBuilder
+    private func rocked(at t: TimeInterval) -> some View {
+        // Healthy: a calm ~1 Hz side-to-side rock.
+        // Trouble: faster (~3.6 Hz), wider, with high-frequency jitter + positional shake.
+        let freq: Double = isTroubled ? 3.6 : 1.0
+        let amp:  Double = isTroubled ? 15  : 11
+
+        let tilt = sin(t * 2 * .pi * freq) * amp
+                 + (isTroubled ? sin(t * 41) * 4 : 0)
+        let shakeX = isTroubled ? sin(t * 47) * 1.6 + sin(t * 89) * 0.9 : 0
+        let shakeY = isTroubled ? sin(t * 53) * 1.2 : 0
+
+        baseIcon
+            .rotationEffect(.degrees(tilt), anchor: .bottom)
+            .offset(x: shakeX, y: shakeY)
     }
 }

@@ -78,6 +78,21 @@ final class StreamManager: ObservableObject {
         runningStreams.allSatisfy { !(statuses[$0.id]?.phase.isActive ?? false) }
     }
 
+    /// True when an active stream is struggling: reconnecting, or the encoder is
+    /// falling behind real time (speed well under 1x). Drives the "shaky" icon.
+    var isTroubled: Bool {
+        for record in runningStreams {
+            guard let status = statuses[record.id], status.phase.isActive else { continue }
+            if case .reconnecting = status.phase { return true }
+            if let speed = status.liveSpeed,
+               let value = Double(speed.replacingOccurrences(of: "x", with: "")),
+               value < 0.8 {
+                return true
+            }
+        }
+        return false
+    }
+
     // MARK: - Stream lifecycle
 
     /// Starts all current configs as new stream instances and appends them to the Live tab.
