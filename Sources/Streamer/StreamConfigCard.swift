@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct StreamConfigCard: View {
     @Binding var config: StreamConfig
@@ -346,11 +347,10 @@ struct StreamConfigCard: View {
     private func pickFile() {
         let panel = NSOpenPanel()
         panel.title = "Choose a video file"
-        panel.allowedContentTypes = [.movie, .video, .audio, .mpeg4Movie,
-                                     .quickTimeMovie,
-                                     .init(filenameExtension: "mov")!,
-                                     .init(filenameExtension: "mp4")!,
-                                     .init(filenameExtension: "mkv")!]
+        // Build the type list safely — UTType(filenameExtension:) is failable and
+        // force-unwrapping it crashes on systems where a UTI isn't registered.
+        let extraTypes = ["mov", "mp4", "mkv", "m4v", "ts"].compactMap { UTType(filenameExtension: $0) }
+        panel.allowedContentTypes = [.movie, .video, .audio, .mpeg4Movie, .quickTimeMovie] + extraTypes
         panel.allowsOtherFileTypes    = true
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
