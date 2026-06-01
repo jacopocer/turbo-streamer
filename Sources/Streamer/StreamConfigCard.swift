@@ -73,6 +73,41 @@ struct StreamConfigCard: View {
                     }
                 }
 
+                Toggle(isOn: $config.adaptiveBitrate) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Adaptive bitrate")
+                            .font(.custom("SofiaPro", size: 12))
+                            .foregroundStyle(.white)
+                        Text("Lowers bitrate automatically when the connection is unstable, then steps back up.")
+                            .font(.custom("SofiaPro", size: 10))
+                            .foregroundStyle(Color.white.opacity(0.4))
+                    }
+                }
+
+                labeled("Fallback slate (optional)") {
+                    HStack(spacing: 8) {
+                        Button("Choose…") { pickFallback() }
+                            .buttonStyle(.bordered)
+                        if config.fallbackMediaPath.isEmpty {
+                            Text("Shown on-air if the input drops")
+                                .font(.custom("SofiaPro", size: 11))
+                                .foregroundStyle(Color.white.opacity(0.3))
+                        } else {
+                            Text(URL(fileURLWithPath: config.fallbackMediaPath).lastPathComponent)
+                                .font(.custom("SofiaPro", size: 11))
+                                .foregroundStyle(Color.white.opacity(0.55))
+                                .lineLimit(1).truncationMode(.middle)
+                                .help(config.fallbackMediaPath)
+                            Button {
+                                config.fallbackMediaPath = ""
+                            } label: { Image(systemName: "xmark.circle.fill") }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(Color.white.opacity(0.3))
+                        }
+                        Spacer()
+                    }
+                }
+
                 HStack(spacing: 4) {
                     Image(systemName: "shield.lefthalf.filled")
                         .font(.system(size: 10))
@@ -307,6 +342,18 @@ struct StreamConfigCard: View {
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
             config.filePath = url.path
+        }
+    }
+
+    private func pickFallback() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose a fallback image or video"
+        panel.allowedContentTypes = [.image, .movie, .video, .png, .jpeg,
+                                     .mpeg4Movie, .quickTimeMovie]
+        panel.allowsOtherFileTypes    = true
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            config.fallbackMediaPath = url.path
         }
     }
 }

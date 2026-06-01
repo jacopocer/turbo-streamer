@@ -32,6 +32,15 @@ enum ResolutionPreset: String, CaseIterable, Identifiable, Codable {
         }
     }
 
+    /// Final output dimensions (w, h) — used to letterbox the fallback slate.
+    var outputDimensions: (w: Int, h: Int) {
+        switch self {
+        case .hd:       return (1920, 1080)
+        case .uhd:      return (3840, 2160)
+        case .vertical: return (1080, 1920)
+        }
+    }
+
     /// Sensible streaming bitrate for each resolution (used to auto-fill the field).
     var defaultBitrate: String {
         switch self {
@@ -79,8 +88,10 @@ struct StreamConfig: Identifiable, Codable {
     var deckLinkDeviceName: String    = ""   // device name as reported by ffmpeg -f decklink -list_devices
 
     // Failsafe options
-    var backupRTMPURL: String         = ""   // full backup destination (url/key); empty = none
+    var backupRTMPURL: String         = ""    // full backup destination (url/key); empty = none
     var safetyRecording: Bool         = false // record program to disk while streaming
+    var fallbackMediaPath: String     = ""    // image/video shown on-air when the input dies; empty = none
+    var adaptiveBitrate: Bool         = false // step bitrate down on instability, back up when stable
 
     init(index: Int = 1) {
         self.id   = UUID()
