@@ -345,11 +345,10 @@ final class StreamManager: ObservableObject {
                 playAlert("Basso")
 
                 // ── Fallback slate: keep the channel on-air during the gap ──
-                let useSlate = !record.config.fallbackMediaPath.isEmpty
-                    && FileManager.default.fileExists(atPath: record.config.fallbackMediaPath)
+                let useSlate = record.config.fallbackEnabled
                 if useSlate {
                     startSlate(for: record, bitrate: bitrate)
-                    appendLog("▣ Showing fallback slate on-air…", to: id)
+                    appendLog("▣ Showing fallback (recent frame) on-air…", to: id)
                 }
 
                 var waited = 0
@@ -388,7 +387,9 @@ final class StreamManager: ObservableObject {
         let id     = record.id
         let config = record.config
         let recordingURL = config.safetyRecording ? makeRecordingURL(for: config) : nil
-        let args   = buildArgs(for: config, recordingURL: recordingURL, bitrateOverride: bitrate)
+        let snapURL      = config.fallbackEnabled ? snapshotPath(for: id) : nil
+        let args   = buildArgs(for: config, recordingURL: recordingURL,
+                               bitrateOverride: bitrate, snapshotURL: snapURL)
 
         if let rec = recordingURL {
             appendLog("● Safety recording → \(rec.path)", to: id)
@@ -492,9 +493,24 @@ final class StreamManager: ObservableObject {
         let id = record.id
         guard slateProcesses[id] == nil else { return }
 
+        // Resolve what to show, in priority order:
+        //   1. a custom card the user picked
+        //   2. the most recent frame captured from the live feed
+        //   3. solid black (so the channel is never dead air)
+        let custom = record.config.fallbackMediaPath
+        let snap   = snapshotPath(for: id).path
+        let source: String?
+        if !custom.isEmpty, FileManager.default.fileExists(atPath: custom) {
+            source = custom
+        } else if FileManager.default.fileExists(atPath: snap) {
+            source = snap
+        } else {
+            source = nil   // black
+        }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ffmpegPath)
-        process.arguments     = buildSlateArgs(for: record.config, bitrate: bitrate)
+        process.arguments     = buildSlateArgs(for: record.config, bitrate: bitrate, sourcePath: source)
         process.standardInput = FileHandle.nullDevice
 
         let libDir = URL(fileURLWithPath: ffmpegPath)
@@ -527,25 +543,32 @@ final class StreamManager: ObservableObject {
         await Task.detached { process.waitUntilExit() }.value
     }
 
-    private func buildSlateArgs(for config: StreamConfig, bitrate: String) -> [String] {
-        let path   = config.fallbackMediaPath
-        let ext    = (path as NSString).pathExtension.lowercased()
-        let isImage = ["png", "jpg", "jpeg", "gif", "bmp", "heic", "tiff", "webp"].contains(ext)
+    private func buildSlateArgs(for config: StreamConfig, bitrate: String, sourcePath: String?) -> [String] {
         let (w, h) = config.resolution.outputDimensions
         let fps    = config.fps
         let kbps   = Self.kbps(bitrate)
         let dest   = "\(config.rtmpURL)/\(config.streamKey)"
 
         var args = ["-hide_banner", "-loglevel", "error"]
-        if isImage {
-            args += ["-loop", "1", "-framerate", fps, "-i", path]
+        let videoFilter: String
+
+        if let path = sourcePath {
+            let ext = (path as NSString).pathExtension.lowercased()
+            let isImage = ["png", "jpg", "jpeg", "gif", "bmp", "heic", "tiff", "webp"].contains(ext)
+            if isImage {
+                args += ["-loop", "1", "-framerate", fps, "-i", path]
+            } else {
+                args += ["-stream_loop", "-1", "-re", "-i", path]
+            }
+            videoFilter = "[0:v]scale=\(w):\(h):force_original_aspect_ratio=decrease,pad=\(w):\(h):(ow-iw)/2:(oh-ih)/2,fps=\(fps),format=yuv420p[v]"
         } else {
-            args += ["-stream_loop", "-1", "-re", "-i", path]
+            args += ["-f", "lavfi", "-i", "color=c=black:s=\(w)x\(h):rate=\(fps)"]
+            videoFilter = "[0:v]format=yuv420p[v]"
         }
+
         args += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
         args += [
-            "-filter_complex",
-            "[0:v]scale=\(w):\(h):force_original_aspect_ratio=decrease,pad=\(w):\(h):(ow-iw)/2:(oh-ih)/2,fps=\(fps),format=yuv420p[v]",
+            "-filter_complex", videoFilter,
             "-map", "[v]", "-map", "1:a",
             "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-pix_fmt", "yuv420p",
             "-b:v", bitrate, "-maxrate", bitrate, "-bufsize", "\(kbps * 2)k",
@@ -556,9 +579,17 @@ final class StreamManager: ObservableObject {
         return args
     }
 
+    /// Stable per-stream path where the live feed's most recent frame is dumped.
+    private func snapshotPath(for id: UUID) -> URL {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("TurboStreamer")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("latest_\(id.uuidString).jpg")
+    }
+
     // MARK: - Private: argument builder
 
-    private func buildArgs(for config: StreamConfig, recordingURL: URL?, bitrateOverride: String? = nil) -> [String] {
+    private func buildArgs(for config: StreamConfig, recordingURL: URL?, bitrateOverride: String? = nil, snapshotURL: URL? = nil) -> [String] {
         let videoBitrate = bitrateOverride ?? config.videoBitrate
         let bitrateNum = Int(videoBitrate.replacingOccurrences(of: "k", with: "")) ?? 4500
         let bufsize    = "\(bitrateNum * 2)k"
@@ -619,25 +650,40 @@ final class StreamManager: ObservableObject {
         let audioArgs = ["-c:a", "aac", "-b:a", config.audioBitrate, "-ar", "48000", "-ac", "2"]
 
         // ── Output ──────────────────────────────────────────────────────────
-        // Single destination → plain flv (the proven path).
-        // Backup destination and/or safety recording → tee (one encode, many sinks).
+        // Simplest proven path (single dest, no snapshot) → plain -vf + flv.
+        // Otherwise → filter_complex so we can fan out: tee (backup/recording)
+        // and/or a 1 fps snapshot branch (most-recent-frame fallback).
         let useTee = !backup.isEmpty || recordingURL != nil
+        let snapshot = snapshotURL != nil
 
-        if useTee {
-            args += [
-                "-filter_complex", "[0:v]\(videoFilter),fps=\(config.fps)[v]",
-                "-map", "[v]", "-map", "0:a?"
-            ]
+        if useTee || snapshot {
+            // Build the filtergraph, splitting off a low-fps snapshot branch if needed.
+            var fc = "[0:v]\(videoFilter),fps=\(config.fps)"
+            if snapshot {
+                fc += ",split=2[vmain][vtmp];[vtmp]fps=1,scale=640:-2[vsnap]"
+            } else {
+                fc += "[vmain]"
+            }
+            args += ["-filter_complex", fc, "-map", "[vmain]", "-map", "0:a?"]
             args += encoderArgs()
             args += audioArgs
 
             // Primary uses default onfail=abort → a primary drop ends ffmpeg and
-            // triggers our reconnect. Backup & recording use onfail=ignore so their
-            // failure never takes down the live stream.
-            var targets = ["[f=flv]\(dest)"]
-            if !backup.isEmpty            { targets.append("[f=flv:onfail=ignore]\(backup)") }
-            if let rec = recordingURL     { targets.append("[f=mpegts:onfail=ignore]\(rec.path)") }
-            args += ["-f", "tee", targets.joined(separator: "|")]
+            // triggers reconnect. Backup & recording use onfail=ignore.
+            if useTee {
+                var targets = ["[f=flv]\(dest)"]
+                if !backup.isEmpty        { targets.append("[f=flv:onfail=ignore]\(backup)") }
+                if let rec = recordingURL { targets.append("[f=mpegts:onfail=ignore]\(rec.path)") }
+                args += ["-f", "tee", targets.joined(separator: "|")]
+            } else {
+                args += ["-f", "flv", dest]
+            }
+
+            // Snapshot output: overwrite one JPEG ~1×/sec with a recent frame.
+            if let snap = snapshotURL {
+                args += ["-map", "[vsnap]", "-c:v", "mjpeg", "-update", "1", "-q:v", "4",
+                         "-f", "image2", snap.path]
+            }
         } else {
             args += ["-vf", videoFilter, "-r", config.fps]
             args += encoderArgs()
