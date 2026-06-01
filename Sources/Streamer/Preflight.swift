@@ -10,8 +10,9 @@ enum Preflight {
               let host = comps.host, !host.isEmpty else { return nil }
         let scheme = (comps.scheme ?? "rtmp").lowercased()
         let defaultPort: UInt16 = (scheme == "rtmps" || scheme == "rtmpts") ? 443 : 1935
-        let port = UInt16(comps.port ?? Int(defaultPort))
-        return (host, port ?? defaultPort)
+        // comps.port can be out of UInt16 range for a malformed URL — clamp safely.
+        let port = comps.port.flatMap { UInt16(exactly: $0) } ?? defaultPort
+        return (host, port)
     }
 
     /// Attempts a TCP connection to the destination, returning true if reachable within `timeout`.

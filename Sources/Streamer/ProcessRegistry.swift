@@ -12,12 +12,35 @@ final class ProcessRegistry: @unchecked Sendable {
     }
 
     /// Terminate and remove the process for `id`.
-    func terminate(id: UUID) {
+    /// Sends one SIGTERM (ffmpeg finalizes the file/RTMP on the first signal), then
+    /// escalates to SIGKILL after `killAfter` seconds if it hasn't exited — so a hung
+    /// ffmpeg can never wedge shutdown.
+    func terminate(id: UUID, killAfter: TimeInterval = 6) {
         lock.lock()
         let p = table[id]
         table[id] = nil
         lock.unlock()
-        if p?.isRunning == true { p?.terminate() }
+        guard let p, p.isRunning else { return }
+        p.terminate()                                   // SIGTERM (sent once)
+        let pid = p.processIdentifier
+        DispatchQueue.global().asyncAfter(deadline: .now() + killAfter) { [weak p] in
+            if p?.isRunning == true { kill(pid, SIGKILL) }   // last-resort force kill
+        }
+    }
+
+    /// Terminate only if the stored process is still the expected instance.
+    /// Prevents a stale watchdog from killing a freshly-relaunched successor process.
+    func terminate(id: UUID, ifMatches process: Process, killAfter: TimeInterval = 6) {
+        lock.lock()
+        let matches = table[id] === process
+        if matches { table[id] = nil }
+        lock.unlock()
+        guard matches, process.isRunning else { return }
+        process.terminate()
+        let pid = process.processIdentifier
+        DispatchQueue.global().asyncAfter(deadline: .now() + killAfter) { [weak process] in
+            if process?.isRunning == true { kill(pid, SIGKILL) }
+        }
     }
 
     /// Remove only if it matches the expected process instance (called from termination handler).

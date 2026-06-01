@@ -27,10 +27,14 @@ final class StreamManager: ObservableObject {
     private var logFileHandles: [UUID: FileHandle]        = [:]
     private var lastProgressAt: [UUID: Date]              = [:]
     private var slateProcesses: [UUID: Process]           = [:]
+    private var slatePipes:     [UUID: Pipe]              = [:]
     private let registry = ProcessRegistry()
 
     /// No video frames for this long ⇒ input is stalled/hung ⇒ force a restart.
     private let hangTimeout: TimeInterval = 10
+
+    /// Power-management token that keeps the Mac awake while streaming.
+    private var activityToken: NSObjectProtocol?
 
     let ffmpegPath: String
 
@@ -47,6 +51,50 @@ final class StreamManager: ObservableObject {
         // Restore previously saved configs (assigning in init does not fire didSet)
         if let saved = Self.loadConfigs(), !saved.isEmpty {
             configs = saved
+        }
+
+        installSleepObservers()
+    }
+
+    // MARK: - Power management
+
+    /// Warn when the Mac is about to sleep — a closed lid forces sleep, which we
+    /// cannot prevent (only idle sleep is blocked by the power assertion).
+    private func installSleepObservers() {
+        let nc = NSWorkspace.shared.notificationCenter
+        nc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in self.handleSystemSleep(waking: false) }
+        }
+        nc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in self.handleSystemSleep(waking: true) }
+        }
+    }
+
+    /// Keep the Mac from idle-sleeping while any stream is live; release when idle.
+    private func refreshPowerAssertion() {
+        if hasActiveStreams, activityToken == nil {
+            activityToken = ProcessInfo.processInfo.beginActivity(
+                options: [.idleSystemSleepDisabled, .userInitiated],
+                reason: "Turbo Streamer: live streaming in progress")
+        } else if !hasActiveStreams, let token = activityToken {
+            ProcessInfo.processInfo.endActivity(token)
+            activityToken = nil
+        }
+    }
+
+    private func handleSystemSleep(waking: Bool) {
+        guard hasActiveStreams else { return }
+        if waking {
+            for r in runningStreams where statuses[r.id]?.phase.isActive == true {
+                appendLog("● Mac woke — recovering the stream…", to: r.id)
+            }
+        } else {
+            playAlert("Funk")
+            for r in runningStreams where statuses[r.id]?.phase.isActive == true {
+                appendLog("⚠ Mac is going to sleep — stream will be interrupted (a closed lid forces sleep and can't be prevented).", to: r.id)
+            }
         }
     }
 
@@ -125,29 +173,47 @@ final class StreamManager: ObservableObject {
 
             spawnTask(for: record)
         }
+        refreshPowerAssertion()   // keep the Mac awake while live
     }
 
     func stopStream(id: UUID) {
         stopFlags[id] = true
         tasks[id]?.cancel()
         tasks[id] = nil
-        registry.terminate(id: id)
-        slateProcesses[id]?.terminate()      // kill fallback slate if it's on-air
-        slateProcesses[id] = nil
+        registry.terminate(id: id)           // SIGTERM → SIGKILL fallback (clean finalize)
+        if let slate = slateProcesses[id] {  // kill fallback slate if it's on-air
+            slateProcesses[id] = nil
+            if slate.isRunning { slate.terminate() }
+            slatePipes.removeValue(forKey: id)?.fileHandleForReading.readabilityHandler = nil
+        }
         if statuses[id]?.phase.isActive == true {
             statuses[id]?.phase = .stopped
             appendLog("■ Stream stopped by user.", to: id)
         }
         closeLogFile(id: id)
+        refreshPowerAssertion()   // release the wake-lock if nothing is live
     }
 
     func stopAll() {
         for record in runningStreams { stopStream(id: record.id) }
     }
 
-    /// Removes finished streams from the Live list.
+    /// Removes finished streams from the Live list AND frees all their per-stream
+    /// resources — without this the dictionaries grow unbounded over a long session.
     func clearStopped() {
+        let removed = runningStreams.filter { !(statuses[$0.id]?.phase.isActive ?? false) }
         runningStreams.removeAll { !(statuses[$0.id]?.phase.isActive ?? false) }
+        for record in removed {
+            let id = record.id
+            statuses[id]        = nil
+            stopFlags[id]       = nil
+            lastProgressAt[id]  = nil
+            logFileHandles[id]?.closeFile()
+            logFileHandles[id]  = nil
+            slatePipes.removeValue(forKey: id)?.fileHandleForReading.readabilityHandler = nil
+            slateProcesses[id]  = nil
+            try? FileManager.default.removeItem(at: snapshotPath(for: id))  // free cached frame
+        }
     }
 
     // MARK: - Device listing
@@ -279,8 +345,14 @@ final class StreamManager: ObservableObject {
         logFileHandles[id] = nil
     }
 
+    /// A user-domain directory, falling back to the temp dir rather than trapping.
+    private func baseDirectory(_ which: FileManager.SearchPathDirectory) -> URL {
+        FileManager.default.urls(for: which, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+    }
+
     private func logsDirectory() -> URL {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let docs = baseDirectory(.documentDirectory)
         let dir  = docs.appendingPathComponent("TurboStreamer Logs")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
@@ -365,6 +437,7 @@ final class StreamManager: ObservableObject {
             if statuses[id]?.phase.isActive == true { statuses[id]?.phase = .stopped }
             lastProgressAt[id] = nil
             closeLogFile(id: id)
+            refreshPowerAssertion()   // release the wake-lock if this was the last live stream
         }
     }
 
@@ -421,16 +494,17 @@ final class StreamManager: ObservableObject {
 
         // ── Hang watchdog: if no video frames arrive for `hangTimeout`, the input
         // is stalled (capture unplugged, source frozen, RTMP stuck) — kill it so the
-        // reconnect loop relaunches and re-acquires the device.
-        let watchdog = Task { @MainActor [weak self] in
-            guard let self else { return }
+        // reconnect loop relaunches and re-acquires the device. Process-matched so a
+        // stale watchdog can never kill a freshly-relaunched successor.
+        let watchdog = Task { @MainActor [weak self, weak process] in
+            guard let self, let process else { return }
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
                 if Task.isCancelled { break }
                 let last = self.lastProgressAt[id] ?? Date()
                 if Date().timeIntervalSince(last) > self.hangTimeout {
                     self.appendLog("⏱ No frames for \(Int(self.hangTimeout)) s — input stalled. Restarting…", to: id)
-                    self.registry.terminate(id: id)   // → terminationHandler → reconnect
+                    self.registry.terminate(id: id, ifMatches: process)   // → terminationHandler → reconnect
                     break
                 }
             }
@@ -438,6 +512,9 @@ final class StreamManager: ObservableObject {
 
         return await withCheckedContinuation { continuation in
 
+            // Drain stdout+stderr ONLY through the readability handler. The termination
+            // handler must never do a blocking read on the same handle (that races the
+            // handler → crash, and can block forever → hang). An empty Data == EOF.
             pipe.fileHandleForReading.readabilityHandler = { handle in
                 let data = handle.availableData
                 guard !data.isEmpty,
@@ -449,13 +526,8 @@ final class StreamManager: ObservableObject {
 
             process.terminationHandler = { [registry] p in
                 watchdog.cancel()
-                pipe.fileHandleForReading.readabilityHandler = nil
-                let tail = pipe.fileHandleForReading.readDataToEndOfFile()
-                if !tail.isEmpty, let text = String(data: tail, encoding: .utf8) {
-                    Task { @MainActor [weak self] in
-                        self?.appendLog(text, to: id)
-                    }
-                }
+                p.terminationHandler = nil
+                pipe.fileHandleForReading.readabilityHandler = nil   // release the dispatch source / FD
                 registry.remove(id: id, ifMatches: p)
                 continuation.resume(returning: p.terminationStatus)
             }
@@ -464,6 +536,7 @@ final class StreamManager: ObservableObject {
                 try process.run()
             } catch {
                 watchdog.cancel()
+                pipe.fileHandleForReading.readabilityHandler = nil
                 registry.remove(id: id, ifMatches: process)
                 Task { @MainActor [weak self] in
                     self?.appendLog("✗ Failed to launch ffmpeg: \(error.localizedDescription)", to: id)
@@ -474,7 +547,7 @@ final class StreamManager: ObservableObject {
     }
 
     private func makeRecordingURL(for config: StreamConfig) -> URL {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let docs = baseDirectory(.documentDirectory)
         let dir  = docs.appendingPathComponent("TurboStreamer Recordings")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let fmt = DateFormatter()
@@ -530,17 +603,30 @@ final class StreamManager: ObservableObject {
         do {
             try process.run()
             slateProcesses[id] = process
+            slatePipes[id]     = sink
         } catch {
             appendLog("⚠ Could not start fallback slate: \(error.localizedDescription)", to: id)
         }
     }
 
-    /// Stops the slate and waits for it to fully release the RTMP connection.
+    /// Stops the slate and waits (bounded) for it to release the RTMP connection,
+    /// escalating to SIGKILL so a wedged slate can never park the reconnect loop.
     private func stopSlate(id: UUID) async {
         guard let process = slateProcesses[id] else { return }
         slateProcesses[id] = nil
-        process.terminate()
-        await Task.detached { process.waitUntilExit() }.value
+        let pipe = slatePipes.removeValue(forKey: id)
+
+        if process.isRunning { process.terminate() }
+        let pid = process.processIdentifier
+
+        // Wait up to ~3s for clean exit, then force-kill.
+        for _ in 0 ..< 30 {
+            if !process.isRunning { break }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        if process.isRunning { kill(pid, SIGKILL) }
+
+        pipe?.fileHandleForReading.readabilityHandler = nil   // release dispatch source / FD
     }
 
     private func buildSlateArgs(for config: StreamConfig, bitrate: String, sourcePath: String?) -> [String] {
@@ -581,7 +667,7 @@ final class StreamManager: ObservableObject {
 
     /// Stable per-stream path where the live feed's most recent frame is dumped.
     private func snapshotPath(for id: UUID) -> URL {
-        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let dir = baseDirectory(.cachesDirectory)
             .appendingPathComponent("TurboStreamer")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("latest_\(id.uuidString).jpg")
@@ -643,7 +729,9 @@ final class StreamManager: ObservableObject {
                     "-c:v", "libx264", "-preset", "veryfast",
                     "-profile:v", "high", "-pix_fmt", "yuv420p",
                     "-b:v", videoBitrate, "-maxrate", videoBitrate,
-                    "-bufsize", bufsize, "-g", "\(fpsInt * 2)", "-tune", "zerolatency"
+                    "-bufsize", bufsize, "-g", "\(fpsInt * 2)",
+                    "-keyint_min", "\(fpsInt * 2)", "-sc_threshold", "0",  // regular keyframes on a 2s grid (platform ABR)
+                    "-tune", "zerolatency"
                 ]
             }
         }
