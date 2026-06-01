@@ -9,6 +9,12 @@ final class StreamManager: ObservableObject {
     @Published private(set) var runningStreams: [RunningStreamRecord] = []
     @Published private(set) var statuses: [UUID: StreamStatus]  = [:]
 
+    // Device lists (shared across all config cards)
+    @Published private(set) var avVideoDevices:  [CaptureDevice] = []
+    @Published private(set) var avAudioDevices:  [CaptureDevice] = []
+    @Published private(set) var deckLinkDevices: [CaptureDevice] = []
+    @Published private(set) var isScanningDevices = false
+
     // MARK: - Private
 
     private var stopFlags:      [UUID: Bool]              = [:]
@@ -101,12 +107,42 @@ final class StreamManager: ObservableObject {
 
     // MARK: - Device listing
 
-    func listDevices() async -> String {
+    /// Scans AVFoundation capture devices and populates the published lists.
+    func refreshAVDevices() async {
+        isScanningDevices = true
+        let raw = await runFFmpegCapturingOutput(
+            args: ["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", "\"\""]
+        )
+        let parsed = Self.parseAVFoundation(raw)
+        avVideoDevices = parsed.video
+        avAudioDevices = parsed.audio
+        isScanningDevices = false
+    }
+
+    /// Scans Blackmagic DeckLink sources and populates the published list.
+    func refreshDeckLinkDevices() async {
+        isScanningDevices = true
+        let raw = await runFFmpegCapturingOutput(args: ["-hide_banner", "-sources", "decklink"])
+        deckLinkDevices = Self.parseDeckLink(raw)
+        isScanningDevices = false
+    }
+
+    /// Runs ffmpeg with the given args and returns combined stdout/stderr.
+    private func runFFmpegCapturingOutput(args: [String]) async -> String {
         let path = ffmpegPath
+        let libDir = URL(fileURLWithPath: path)
+            .deletingLastPathComponent()
+            .appendingPathComponent("lib").path
         return await Task.detached(priority: .userInitiated) {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: path)
-            p.arguments = ["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", "\"\""]
+            p.arguments = args
+            if FileManager.default.fileExists(atPath: libDir) {
+                var env = ProcessInfo.processInfo.environment
+                let existing = env["DYLD_LIBRARY_PATH"] ?? ""
+                env["DYLD_LIBRARY_PATH"] = existing.isEmpty ? libDir : "\(libDir):\(existing)"
+                p.environment = env
+            }
             let pipe = Pipe()
             p.standardOutput = pipe
             p.standardError  = pipe
@@ -114,6 +150,52 @@ final class StreamManager: ObservableObject {
             p.waitUntilExit()
             return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         }.value
+    }
+
+    // MARK: - Device list parsers
+
+    /// Parses `ffmpeg -f avfoundation -list_devices` output into video/audio lists.
+    static func parseAVFoundation(_ output: String) -> (video: [CaptureDevice], audio: [CaptureDevice]) {
+        var video: [CaptureDevice] = []
+        var audio: [CaptureDevice] = []
+        var mode = 0   // 1 = video, 2 = audio
+
+        for line in output.components(separatedBy: "\n") {
+            if line.contains("AVFoundation video devices") { mode = 1; continue }
+            if line.contains("AVFoundation audio devices") { mode = 2; continue }
+            guard mode != 0 else { continue }
+
+            // Each line looks like: "[AVFoundation indev @ 0x..] [0] FaceTime HD Camera"
+            // Skip the log-prefix bracket, then read "[index] name".
+            guard let prefixEnd = line.firstIndex(of: "]") else { continue }
+            let rest = line[line.index(after: prefixEnd)...]
+            guard let open  = rest.firstIndex(of: "["),
+                  let close = rest.firstIndex(of: "]"),
+                  open < close else { continue }
+            let idx  = rest[rest.index(after: open)..<close].trimmingCharacters(in: .whitespaces)
+            guard Int(idx) != nil else { continue }
+            let name = rest[rest.index(after: close)...].trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else { continue }
+
+            let device = CaptureDevice(index: idx, name: name)
+            if mode == 1 { video.append(device) } else { audio.append(device) }
+        }
+        return (video, audio)
+    }
+
+    /// Parses `ffmpeg -sources decklink` output into a device list.
+    static func parseDeckLink(_ output: String) -> [CaptureDevice] {
+        var devices: [CaptureDevice] = []
+        for line in output.components(separatedBy: "\n") {
+            guard let open  = line.firstIndex(of: "["),
+                  let close = line.firstIndex(of: "]"),
+                  open < close else { continue }
+            let name = String(line[line.index(after: open)..<close]).trimmingCharacters(in: .whitespaces)
+            // Skip ffmpeg log lines like "[decklink @ 0x..] ..."
+            if name.isEmpty || name.contains("@") { continue }
+            devices.append(CaptureDevice(index: "", name: name))
+        }
+        return devices
     }
 
     // MARK: - Private: log helpers
@@ -257,6 +339,13 @@ final class StreamManager: ObservableObject {
                 "-hwaccel", "videotoolbox",
                 "-re", "-stream_loop", "-1",
                 "-i", config.filePath
+            ]
+        } else if config.inputType == .decklink {
+            // Blackmagic DeckLink: device referenced by name, audio included automatically
+            args = [
+                "-hide_banner", "-loglevel", "info",
+                "-f", "decklink",
+                "-i", config.deckLinkDeviceName
             ]
         } else {
             let audio = config.audioDeviceIndex.isEmpty ? "none" : config.audioDeviceIndex
