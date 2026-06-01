@@ -363,10 +363,13 @@ final class StreamManager: ObservableObject {
                 "-i", config.filePath
             ]
         } else if config.inputType == .decklink {
-            // Blackmagic DeckLink: device referenced by name, audio included automatically
+            // Blackmagic DeckLink: device referenced by name, audio included automatically.
+            // -thread_queue_size buffers the high-bitrate live feed so it doesn't overrun
+            // while the RTMP output is still connecting.
             args = [
                 "-hide_banner", "-loglevel", "info",
                 "-f", "decklink",
+                "-thread_queue_size", "1024",
                 "-i", config.deckLinkDeviceName
             ]
         } else {
@@ -374,6 +377,7 @@ final class StreamManager: ObservableObject {
             args = [
                 "-hide_banner", "-loglevel", "info",
                 "-f", "avfoundation",
+                "-thread_queue_size", "1024",
                 "-video_size", config.resolution.captureSize,
                 "-framerate", config.fps,
                 "-i", "\(config.videoDeviceIndex):\(audio)"
