@@ -22,11 +22,7 @@ struct ContentView: View {
     @ViewBuilder
     private var appHeader: some View {
         HStack(spacing: 12) {
-            Image(nsImage: NSApplication.shared.applicationIconImage)
-                .resizable()
-                .interpolation(.high)
-                .frame(width: 36, height: 36)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+            WobblingIcon(isActive: manager.hasActiveStreams)
 
             Text("Turbo Streamer")
                 .font(.custom("Bello-Pro", size: 28))
@@ -133,5 +129,37 @@ struct ContentView: View {
 
     private var activeBadgeCount: Int {
         manager.runningStreams.filter { manager.statuses[$0.id]?.phase.isActive == true }.count
+    }
+}
+
+// MARK: - Wobbling app icon (rocks side-to-side while streaming)
+
+struct WobblingIcon: View {
+    let isActive: Bool
+    @State private var tilt: Double = 0
+
+    private let maxTilt: Double = 11      // degrees each side
+    private let halfPeriod = 0.5          // seconds per swing
+
+    var body: some View {
+        Image(nsImage: NSApplication.shared.applicationIconImage)
+            .resizable()
+            .interpolation(.high)
+            .frame(width: 36, height: 36)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .rotationEffect(.degrees(tilt), anchor: .bottom)
+            .onChange(of: isActive) { active in updateWobble(active) }
+            .onAppear { updateWobble(isActive) }
+    }
+
+    private func updateWobble(_ active: Bool) {
+        if active {
+            tilt = -maxTilt   // start tilted left, then animate across
+            withAnimation(.easeInOut(duration: halfPeriod).repeatForever(autoreverses: true)) {
+                tilt = maxTilt
+            }
+        } else {
+            withAnimation(.easeInOut(duration: 0.25)) { tilt = 0 }
+        }
     }
 }
