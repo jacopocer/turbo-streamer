@@ -40,6 +40,8 @@ It was built specifically for live event production where you need to:
   - **Freeze / black detection** — warns when the feed freezes or goes black even though frames technically flow
   - **Backup RTMP destination** — push to a second ingest simultaneously (a backup failure never takes down the primary)
   - **Safety recording** — records the program to disk (`~/Documents/TurboStreamer Recordings`) while streaming, as resilient `.ts`
+  - **Fallback slate** — when the input dies, an image/video you choose is streamed on-air (looped) so viewers never see black, then it cuts back when the feed returns
+  - **Adaptive bitrate** — lowers bitrate when the connection is unstable and steps it back up once stable
   - **Pre-flight check** — verifies the destination is reachable before going live
   - **Audible alerts** — chimes on disconnect, recovery, and freeze/black
 - **Remembers your setup** — stream configs persist across launches automatically

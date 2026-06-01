@@ -26,6 +26,7 @@ final class StreamManager: ObservableObject {
     private var tasks:          [UUID: Task<Void, Never>] = [:]
     private var logFileHandles: [UUID: FileHandle]        = [:]
     private var lastProgressAt: [UUID: Date]              = [:]
+    private var slateProcesses: [UUID: Process]           = [:]
     private let registry = ProcessRegistry()
 
     /// No video frames for this long ⇒ input is stalled/hung ⇒ force a restart.
@@ -131,6 +132,8 @@ final class StreamManager: ObservableObject {
         tasks[id]?.cancel()
         tasks[id] = nil
         registry.terminate(id: id)
+        slateProcesses[id]?.terminate()      // kill fallback slate if it's on-air
+        slateProcesses[id] = nil
         if statuses[id]?.phase.isActive == true {
             statuses[id]?.phase = .stopped
             appendLog("■ Stream stopped by user.", to: id)
@@ -298,17 +301,20 @@ final class StreamManager: ObservableObject {
 
             var attempt = 0
             var consecutiveFailures = 0
+            let originalKbps = Self.kbps(record.config.videoBitrate)
+            var currentKbps  = originalKbps
 
             while !Task.isCancelled {
                 guard stopFlags[id] == false else { break }
 
                 attempt += 1
                 statuses[id]?.phase = attempt == 1 ? .running : .reconnecting(attempt: attempt)
-                appendLog("▶ Starting (attempt \(attempt))…", to: id)
+                let bitrate = "\(currentKbps)k"
+                appendLog("▶ Starting (attempt \(attempt)) at \(bitrate)…", to: id)
 
                 let startedAt = Date()
                 lastProgressAt[id] = Date()
-                let exitCode = await runFFmpeg(record: record)
+                let exitCode = await runFFmpeg(record: record, bitrate: bitrate)
                 let ranFor   = Date().timeIntervalSince(startedAt)
 
                 if Task.isCancelled || stopFlags[id] == true { break }
@@ -319,8 +325,18 @@ final class StreamManager: ObservableObject {
                     break
                 }
 
-                // Failure → reconnect with exponential backoff.
-                // A run that lasted a while was healthy, so reset the backoff ladder.
+                // ── Adaptive bitrate ────────────────────────────────────────
+                if record.config.adaptiveBitrate {
+                    if ranFor < 20, currentKbps > Self.floorKbps(originalKbps) {
+                        currentKbps = max(Self.floorKbps(originalKbps), currentKbps * 7 / 10)
+                        appendLog("📉 Unstable — lowering bitrate to \(currentKbps)k.", to: id)
+                    } else if ranFor > 120, currentKbps < originalKbps {
+                        currentKbps = min(originalKbps, currentKbps * 13 / 10)
+                        appendLog("📈 Stable — raising bitrate to \(currentKbps)k.", to: id)
+                    }
+                }
+
+                // ── Reconnect with exponential backoff ──────────────────────
                 if ranFor > 30 { consecutiveFailures = 0 } else { consecutiveFailures += 1 }
                 let delay = Self.backoffDelay(consecutiveFailures)
 
@@ -328,19 +344,37 @@ final class StreamManager: ObservableObject {
                 appendLog("⚠ Disconnected (exit \(exitCode)) — reconnecting in \(delay) s…", to: id)
                 playAlert("Basso")
 
+                // ── Fallback slate: keep the channel on-air during the gap ──
+                let useSlate = !record.config.fallbackMediaPath.isEmpty
+                    && FileManager.default.fileExists(atPath: record.config.fallbackMediaPath)
+                if useSlate {
+                    startSlate(for: record, bitrate: bitrate)
+                    appendLog("▣ Showing fallback slate on-air…", to: id)
+                }
+
                 var waited = 0
                 while waited < delay {
                     if Task.isCancelled || stopFlags[id] == true { break }
                     try? await Task.sleep(for: .seconds(1))
                     waited += 1
                 }
+
+                if useSlate { await stopSlate(id: id) }   // release RTMP before relaunching live
             }
 
+            await stopSlate(id: id)
             if statuses[id]?.phase.isActive == true { statuses[id]?.phase = .stopped }
             lastProgressAt[id] = nil
             closeLogFile(id: id)
         }
     }
+
+    /// Parse a bitrate string like "5872k" → 5872 (kbps).
+    static func kbps(_ s: String) -> Int {
+        Int(s.lowercased().replacingOccurrences(of: "k", with: "")) ?? 4500
+    }
+    /// Lowest bitrate adaptive mode will drop to.
+    static func floorKbps(_ original: Int) -> Int { max(800, original / 4) }
 
     /// Exponential backoff ladder for reconnect delays (seconds).
     static func backoffDelay(_ consecutiveFailures: Int) -> Int {
@@ -350,11 +384,11 @@ final class StreamManager: ObservableObject {
 
     // MARK: - Private: process execution
 
-    private func runFFmpeg(record: RunningStreamRecord) async -> Int32 {
+    private func runFFmpeg(record: RunningStreamRecord, bitrate: String) async -> Int32 {
         let id     = record.id
         let config = record.config
         let recordingURL = config.safetyRecording ? makeRecordingURL(for: config) : nil
-        let args   = buildArgs(for: config, recordingURL: recordingURL)
+        let args   = buildArgs(for: config, recordingURL: recordingURL, bitrateOverride: bitrate)
 
         if let rec = recordingURL {
             appendLog("● Safety recording → \(rec.path)", to: id)
@@ -450,10 +484,83 @@ final class StreamManager: ObservableObject {
         return dir.appendingPathComponent("\(fmt.string(from: Date()))_\(safe).ts")
     }
 
+    // MARK: - Private: fallback slate
+
+    /// Streams the configured fallback media (looped) to the primary destination,
+    /// keeping the channel on-air while the live input is down.
+    private func startSlate(for record: RunningStreamRecord, bitrate: String) {
+        let id = record.id
+        guard slateProcesses[id] == nil else { return }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ffmpegPath)
+        process.arguments     = buildSlateArgs(for: record.config, bitrate: bitrate)
+        process.standardInput = FileHandle.nullDevice
+
+        let libDir = URL(fileURLWithPath: ffmpegPath)
+            .deletingLastPathComponent().appendingPathComponent("lib").path
+        if FileManager.default.fileExists(atPath: libDir) {
+            var env = ProcessInfo.processInfo.environment
+            let existing = env["DYLD_LIBRARY_PATH"] ?? ""
+            env["DYLD_LIBRARY_PATH"] = existing.isEmpty ? libDir : "\(libDir):\(existing)"
+            process.environment = env
+        }
+
+        let sink = Pipe()
+        process.standardOutput = sink
+        process.standardError  = sink
+        sink.fileHandleForReading.readabilityHandler = { h in _ = h.availableData }   // drain & discard
+
+        do {
+            try process.run()
+            slateProcesses[id] = process
+        } catch {
+            appendLog("⚠ Could not start fallback slate: \(error.localizedDescription)", to: id)
+        }
+    }
+
+    /// Stops the slate and waits for it to fully release the RTMP connection.
+    private func stopSlate(id: UUID) async {
+        guard let process = slateProcesses[id] else { return }
+        slateProcesses[id] = nil
+        process.terminate()
+        await Task.detached { process.waitUntilExit() }.value
+    }
+
+    private func buildSlateArgs(for config: StreamConfig, bitrate: String) -> [String] {
+        let path   = config.fallbackMediaPath
+        let ext    = (path as NSString).pathExtension.lowercased()
+        let isImage = ["png", "jpg", "jpeg", "gif", "bmp", "heic", "tiff", "webp"].contains(ext)
+        let (w, h) = config.resolution.outputDimensions
+        let fps    = config.fps
+        let kbps   = Self.kbps(bitrate)
+        let dest   = "\(config.rtmpURL)/\(config.streamKey)"
+
+        var args = ["-hide_banner", "-loglevel", "error"]
+        if isImage {
+            args += ["-loop", "1", "-framerate", fps, "-i", path]
+        } else {
+            args += ["-stream_loop", "-1", "-re", "-i", path]
+        }
+        args += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
+        args += [
+            "-filter_complex",
+            "[0:v]scale=\(w):\(h):force_original_aspect_ratio=decrease,pad=\(w):\(h):(ow-iw)/2:(oh-ih)/2,fps=\(fps),format=yuv420p[v]",
+            "-map", "[v]", "-map", "1:a",
+            "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-pix_fmt", "yuv420p",
+            "-b:v", bitrate, "-maxrate", bitrate, "-bufsize", "\(kbps * 2)k",
+            "-g", "\((Int(fps) ?? 30) * 2)", "-tune", "zerolatency",
+            "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+            "-f", "flv", dest
+        ]
+        return args
+    }
+
     // MARK: - Private: argument builder
 
-    private func buildArgs(for config: StreamConfig, recordingURL: URL?) -> [String] {
-        let bitrateNum = Int(config.videoBitrate.replacingOccurrences(of: "k", with: "")) ?? 4500
+    private func buildArgs(for config: StreamConfig, recordingURL: URL?, bitrateOverride: String? = nil) -> [String] {
+        let videoBitrate = bitrateOverride ?? config.videoBitrate
+        let bitrateNum = Int(videoBitrate.replacingOccurrences(of: "k", with: "")) ?? 4500
         let bufsize    = "\(bitrateNum * 2)k"
         let fpsInt     = Int(config.fps) ?? 30
         let dest       = "\(config.rtmpURL)/\(config.streamKey)"
@@ -497,14 +604,14 @@ final class StreamManager: ObservableObject {
             if config.resolution == .uhd {
                 return [
                     "-c:v", "h264_videotoolbox", "-profile:v", "high",
-                    "-b:v", config.videoBitrate, "-g", "\(fpsInt * 2)",
+                    "-b:v", videoBitrate, "-g", "\(fpsInt * 2)",
                     "-realtime", "1", "-prio_speed", "1", "-bf", "0", "-allow_sw", "1"
                 ]
             } else {
                 return [
                     "-c:v", "libx264", "-preset", "veryfast",
                     "-profile:v", "high", "-pix_fmt", "yuv420p",
-                    "-b:v", config.videoBitrate, "-maxrate", config.videoBitrate,
+                    "-b:v", videoBitrate, "-maxrate", videoBitrate,
                     "-bufsize", bufsize, "-g", "\(fpsInt * 2)", "-tune", "zerolatency"
                 ]
             }
