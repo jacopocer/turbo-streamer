@@ -31,6 +31,9 @@ final class StreamManager: ObservableObject {
     private var slatePipes:     [UUID: Pipe]              = [:]
     private var overlayText:    [UUID: String]            = [:]   // live overlay text per stream
     private var captureFramerate: [UUID: String]          = [:]   // device-supported fps, probed once
+    @Published private(set) var previewing: Set<UUID>     = []     // configs with a live preview running
+    private var previewProcesses: [UUID: Process]         = [:]
+    private var previewPipes:     [UUID: Pipe]            = [:]
     private let registry = ProcessRegistry()
 
     /// No video frames for this long ⇒ input is stalled/hung ⇒ force a restart.
@@ -154,6 +157,7 @@ final class StreamManager: ObservableObject {
 
     /// Starts all current configs as new stream instances and appends them to the Live tab.
     func startStreams() {
+        stopAllPreviews()   // release devices before the real streams grab them
         let logsDir = logsDirectory()
         let now = Date()
         let formatter = DateFormatter()
@@ -809,42 +813,111 @@ final class StreamManager: ObservableObject {
         try? text.write(to: overlayTextURL(for: id), atomically: true, encoding: .utf8)
     }
 
-    // MARK: - Preview (before going live)
+    // MARK: - Live preview (local, never streamed)
 
-    /// Renders a single frame of (source + overlay) exactly as ffmpeg will stream it.
-    /// Falls back to a neutral background if no live source is available.
-    func renderPreview(for config: StreamConfig) async -> NSImage? {
-        let dir = baseDirectory(.cachesDirectory).appendingPathComponent("TurboStreamer")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let textURL = dir.appendingPathComponent("preview_\(config.id.uuidString).txt")
-        let outURL  = dir.appendingPathComponent("preview_\(config.id.uuidString).png")
-        try? FileManager.default.removeItem(at: outURL)
-        try? config.overlay.text.write(to: textURL, atomically: true, encoding: .utf8)
+    /// Where each config's running preview frames are written (overwritten ~12×/sec).
+    func previewImageURL(for configID: UUID) -> URL {
+        baseDirectory(.cachesDirectory)
+            .appendingPathComponent("TurboStreamer", isDirectory: true)
+            .appendingPathComponent("preview_\(configID.uuidString).jpg")
+    }
+    private func previewOverlayURL(for configID: UUID) -> URL {
+        baseDirectory(.cachesDirectory)
+            .appendingPathComponent("TurboStreamer", isDirectory: true)
+            .appendingPathComponent("previewovl_\(configID.uuidString).txt")
+    }
 
-        let (w, h) = config.resolution.outputDimensions
-        var args = ["-hide_banner", "-loglevel", "error"]
+    func isPreviewing(_ id: UUID) -> Bool { previewing.contains(id) }
+    var anyPreviewing: Bool { !previewing.isEmpty }
 
-        // Pick a source frame; fall back to a neutral background for text-only preview.
-        if config.inputType == .file, !config.filePath.isEmpty,
-           FileManager.default.fileExists(atPath: config.filePath) {
-            args += ["-ss", "1", "-i", config.filePath]
-        } else if config.inputType == .decklink, !config.deckLinkDeviceName.isEmpty {
-            args += ["-f", "decklink", "-i", config.deckLinkDeviceName]
-        } else if config.inputType == .capture {
+    /// Start a live local preview of the composed output (source + overlay), no RTMP.
+    func startPreview(for config: StreamConfig) async {
+        let id = config.id
+        guard previewProcesses[id] == nil else { return }
+
+        try? FileManager.default.createDirectory(
+            at: baseDirectory(.cachesDirectory).appendingPathComponent("TurboStreamer"),
+            withIntermediateDirectories: true)
+        try? config.overlay.text.write(to: previewOverlayURL(for: id), atomically: true, encoding: .utf8)
+
+        var camFps = "30"
+        if config.inputType == .capture {
             await ensureCameraAccess()
-            let camFps = await probeCaptureFramerate(deviceIndex: config.videoDeviceIndex,
-                                                     target: Int(config.fps) ?? 30)
-            args += ["-f", "avfoundation", "-framerate", camFps, "-i", "\(config.videoDeviceIndex):none"]
-        } else {
-            args += ["-f", "lavfi", "-i", "color=c=0x1a1a1a:s=\(w)x\(h)"]
+            camFps = await probeCaptureFramerate(deviceIndex: config.videoDeviceIndex, target: Int(config.fps) ?? 30)
         }
+        if previewProcesses[id] != nil { return }   // re-check after await
 
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ffmpegPath)
+        process.arguments     = buildPreviewArgs(for: config, captureFPS: camFps)
+        process.standardInput = FileHandle.nullDevice
+        if let env = subprocessEnvironment() { process.environment = env }
+
+        let sink = Pipe()
+        process.standardOutput = sink
+        process.standardError  = sink
+        sink.fileHandleForReading.readabilityHandler = { h in _ = h.availableData }
+
+        do {
+            try process.run()
+            previewProcesses[id] = process
+            previewPipes[id]     = sink
+            previewing.insert(id)
+        } catch { /* preview is best-effort */ }
+    }
+
+    func stopPreview(_ id: UUID) {
+        if let p = previewProcesses[id] {
+            previewProcesses[id] = nil
+            if p.isRunning { p.terminate() }
+        }
+        previewPipes.removeValue(forKey: id)?.fileHandleForReading.readabilityHandler = nil
+        previewing.remove(id)
+        try? FileManager.default.removeItem(at: previewImageURL(for: id))
+    }
+
+    func stopAllPreviews() {
+        for id in Array(previewProcesses.keys) { stopPreview(id) }
+    }
+
+    /// Live-update the preview's overlay text (drawtext reload picks it up).
+    func updatePreviewOverlayText(_ text: String, for configID: UUID) {
+        guard previewing.contains(configID) else { return }
+        try? text.write(to: previewOverlayURL(for: configID), atomically: true, encoding: .utf8)
+    }
+
+    private func buildPreviewArgs(for config: StreamConfig, captureFPS: String) -> [String] {
+        var a = ["-hide_banner", "-loglevel", "error"]
+        switch config.inputType {
+        case .file where !config.filePath.isEmpty:
+            a += ["-re", "-stream_loop", "-1", "-i", config.filePath]
+        case .decklink where !config.deckLinkDeviceName.isEmpty:
+            a += ["-f", "decklink", "-i", config.deckLinkDeviceName]
+        case .capture:
+            a += ["-f", "avfoundation", "-framerate", captureFPS, "-i", "\(config.videoDeviceIndex):none"]
+        default:
+            let (w, h) = config.resolution.outputDimensions
+            a += ["-f", "lavfi", "-i", "color=c=0x1a1a1a:s=\(w)x\(h):rate=12"]
+        }
         var vf = config.resolution.scaleFilter
-        if let dt = drawtextFilter(for: config.overlay, textPath: textURL.path) { vf += ",\(dt)" }
-        args += ["-frames:v", "1", "-vf", vf, "-y", outURL.path]
+        if config.overlay.enabled,
+           let dt = drawtextFilter(for: config.overlay, textPath: previewOverlayURL(for: config.id).path) {
+            vf += ",\(dt)"
+        }
+        vf += ",fps=12,scale=960:-2"   // downscale: previews stay light
+        a += ["-an", "-vf", vf, "-q:v", "6", "-update", "1", "-f", "image2", previewImageURL(for: config.id).path]
+        return a
+    }
 
-        _ = await runFFmpegCapturingOutput(args: args)
-        return NSImage(contentsOfFile: outURL.path)
+    /// DYLD env so the bundled ffmpeg finds its dylibs (shared by all spawns).
+    private func subprocessEnvironment() -> [String: String]? {
+        let libDir = URL(fileURLWithPath: ffmpegPath)
+            .deletingLastPathComponent().appendingPathComponent("lib").path
+        guard FileManager.default.fileExists(atPath: libDir) else { return nil }
+        var env = ProcessInfo.processInfo.environment
+        let existing = env["DYLD_LIBRARY_PATH"] ?? ""
+        env["DYLD_LIBRARY_PATH"] = existing.isEmpty ? libDir : "\(libDir):\(existing)"
+        return env
     }
 
     // MARK: - Private: argument builder
