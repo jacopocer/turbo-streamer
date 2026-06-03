@@ -756,8 +756,7 @@ final class StreamManager: ObservableObject {
         } else if config.inputType == .decklink, !config.deckLinkDeviceName.isEmpty {
             args += ["-f", "decklink", "-i", config.deckLinkDeviceName]
         } else if config.inputType == .capture {
-            args += ["-f", "avfoundation", "-video_size", config.resolution.captureSize,
-                     "-framerate", config.fps, "-i", "\(config.videoDeviceIndex):none"]
+            args += ["-f", "avfoundation", "-i", "\(config.videoDeviceIndex):none"]
         } else {
             args += ["-f", "lavfi", "-i", "color=c=0x1a1a1a:s=\(w)x\(h)"]
         }
@@ -798,13 +797,15 @@ final class StreamManager: ObservableObject {
                 "-i", config.deckLinkDeviceName
             ]
         } else {
+            // AVFoundation capture: do NOT force -video_size/-framerate — many cameras
+            // (e.g. the built-in FaceTime camera) only support their own native modes and
+            // reject 1080p25. Let the device pick its default; the scale filter + output
+            // -r normalize to the chosen resolution/fps.
             let audio = config.audioDeviceIndex.isEmpty ? "none" : config.audioDeviceIndex
             args = [
                 "-hide_banner", "-loglevel", "info",
                 "-f", "avfoundation",
                 "-thread_queue_size", "1024",
-                "-video_size", config.resolution.captureSize,
-                "-framerate", config.fps,
                 "-i", "\(config.videoDeviceIndex):\(audio)"
             ]
         }

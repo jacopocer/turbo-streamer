@@ -113,9 +113,9 @@ struct OverlayEditor: View {
                 }
 
                 // ── Preview ──────────────────────────────────────────────────
-                HStack {
+                HStack(spacing: 8) {
                     Button {
-                        Task { rendering = true; preview = await manager.renderPreview(for: config); rendering = false }
+                        Task { await renderAndShow(openWindow: true) }
                     } label: {
                         Label(rendering ? "Rendering…" : "Preview", systemImage: "eye")
                             .font(.custom("SofiaPro-SemiBold", size: 12))
@@ -123,7 +123,18 @@ struct OverlayEditor: View {
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                     .disabled(rendering)
-                    Text("Renders the real source + overlay before you go live.")
+
+                    if preview != nil {
+                        Button {
+                            Task { await renderAndShow(openWindow: true) }
+                        } label: {
+                            Label("Open large", systemImage: "arrow.up.left.and.arrow.down.right")
+                                .font(.custom("SofiaPro", size: 11))
+                        }
+                        .buttonStyle(.bordered).controlSize(.small)
+                    }
+
+                    Text("Opens a resizable preview window.")
                         .font(.custom("SofiaPro", size: 10)).foregroundStyle(Color.white.opacity(0.35))
                     Spacer()
                 }
@@ -131,6 +142,14 @@ struct OverlayEditor: View {
                 previewArea
             }
         }
+    }
+
+    private func renderAndShow(openWindow: Bool) async {
+        rendering = true
+        let img = await manager.renderPreview(for: config)
+        preview = img
+        rendering = false
+        if openWindow, let img { PreviewWindow.shared.show(img, title: "Preview — \(config.name)") }
     }
 
     @ViewBuilder
@@ -147,8 +166,11 @@ struct OverlayEditor: View {
                     .font(.custom("SofiaPro", size: 11)).foregroundStyle(Color.white.opacity(0.3))
             }
         }
-        .frame(height: 190)
+        .frame(height: 220)
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.1), lineWidth: 1))
+        .contentShape(RoundedRectangle(cornerRadius: 8))
+        .onTapGesture { if let img = preview { PreviewWindow.shared.show(img, title: "Preview — \(config.name)") } }
+        .help("Click to open a larger, resizable window")
     }
 
     // MARK: - Helpers
@@ -171,6 +193,38 @@ struct OverlayEditor: View {
     }
     @ViewBuilder private func label(_ t: String) -> some View {
         Text(t).font(.custom("SofiaPro", size: 11)).foregroundStyle(Color.white.opacity(0.4))
+    }
+}
+
+// MARK: - Resizable preview window
+
+@MainActor
+final class PreviewWindow {
+    static let shared = PreviewWindow()
+    private var window: NSWindow?
+    private var imageView: NSImageView?
+
+    func show(_ image: NSImage, title: String) {
+        if window == nil {
+            let iv = NSImageView()
+            iv.imageScaling = .scaleProportionallyUpOrDown
+            iv.wantsLayer = true
+            iv.layer?.backgroundColor = NSColor.black.cgColor
+            let w = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 960, height: 540),
+                styleMask: [.titled, .closable, .resizable, .miniaturizable],
+                backing: .buffered, defer: false)
+            w.isReleasedWhenClosed = false
+            w.contentView = iv
+            w.center()
+            window = w
+            imageView = iv
+        }
+        imageView?.image = image
+        // Match the window aspect to the image on first show for a sensible default.
+        window?.title = title
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 
