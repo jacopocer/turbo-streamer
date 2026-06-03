@@ -747,7 +747,7 @@ final class StreamManager: ObservableObject {
         let kbps   = Self.kbps(bitrate)
         let dest   = "\(config.rtmpURL)/\(config.streamKey)"
 
-        var args = ["-hide_banner", "-loglevel", "error"]
+        var args = ["-hide_banner", "-y", "-loglevel", "error"]
         let videoFilter: String
 
         if let path = sourcePath {
@@ -1022,7 +1022,10 @@ final class StreamManager: ObservableObject {
     }
 
     private func buildPreviewArgs(for config: StreamConfig, captureFPS: String) -> [String] {
-        var a = ["-hide_banner", "-loglevel", "error"]
+        // -y: overwrite the preview JPEG without prompting. Without it, a restart finds
+        // the file already there, ffmpeg asks "Overwrite? [y/N]", answers no, and exits
+        // immediately → frozen preview.
+        var a = ["-hide_banner", "-y", "-loglevel", "error"]
         switch config.inputType {
         case .file where !config.filePath.isEmpty:
             a += ["-re", "-stream_loop", "-1", "-i", config.filePath]
@@ -1096,6 +1099,10 @@ final class StreamManager: ObservableObject {
                 "-i", "\(config.videoDeviceIndex):\(audio)"
             ]
         }
+
+        // -y: overwrite file outputs (the snapshot JPEG) without prompting — otherwise a
+        // reconnect finds the previous snapshot and ffmpeg refuses to open the output.
+        args.insert("-y", at: 1)
 
         // ── Video filter: scale + content detectors (freeze / black) + overlay ──
         let detectors   = "freezedetect=n=-60dB:d=3,blackdetect=d=3"
