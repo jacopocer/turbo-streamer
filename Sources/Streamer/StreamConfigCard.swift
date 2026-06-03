@@ -134,6 +134,13 @@ struct StreamConfigCard: View {
 
             divider
 
+            // ── Text overlay ───────────────────────────────────────────────────
+            sectionContent {
+                OverlayEditor(config: $config)
+            }
+
+            divider
+
             // ── Video ─────────────────────────────────────────────────────────
             sectionContent {
                 sectionHeader("Video")
