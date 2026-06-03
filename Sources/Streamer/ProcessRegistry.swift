@@ -48,4 +48,10 @@ final class ProcessRegistry: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         if table[id] === process { table[id] = nil }
     }
+
+    /// Force-kill every tracked process immediately (used on app quit so no ffmpeg orphans).
+    func killAll() {
+        lock.lock(); let procs = Array(table.values); table.removeAll(); lock.unlock()
+        for p in procs where p.isRunning { kill(p.processIdentifier, SIGKILL) }
+    }
 }

@@ -77,6 +77,19 @@ final class StreamManager: ObservableObject {
             guard let self else { return }
             Task { @MainActor in self.handleSystemSleep(waking: true) }
         }
+        // Kill all child ffmpeg processes on quit so they don't orphan and linger
+        // (orphans from previous runs fight over the same files and break previews).
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            MainActor.assumeIsolated { self.killAllChildProcesses() }
+        }
+    }
+
+    /// SIGKILL every ffmpeg we spawned (streams, slates, previews). Called on app quit.
+    func killAllChildProcesses() {
+        for p in previewProcesses.values where p.isRunning { kill(p.processIdentifier, SIGKILL) }
+        for p in slateProcesses.values   where p.isRunning { kill(p.processIdentifier, SIGKILL) }
+        registry.killAll()
     }
 
     /// Keep the Mac from idle-sleeping while any stream is live; release when idle.
