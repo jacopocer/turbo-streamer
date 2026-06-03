@@ -1015,9 +1015,19 @@ final class StreamManager: ObservableObject {
             let newSig = previewStyleSignature(newC)
             let styleChanged = oldSig != newSig
             dlog("  sync[\(short)]: textChanged=\(textChanged) styleChanged=\(styleChanged)")
-            if styleChanged { dlog("    old=\(oldSig)\n    new=\(newSig)") }
+            // Text applies live (drawtext reload). Style/source changes apply only when
+            // the user clicks "Refresh Preview" — avoids re-opening the camera on every tweak.
             if textChanged { updatePreviewOverlayText(newC.overlay.text, for: id) }
-            if styleChanged { restartPreviewDebounced(for: newC) }
+            _ = (oldSig, newSig, styleChanged)
+        }
+    }
+
+    /// Re-render every running preview with the latest settings (the Refresh Preview button).
+    func refreshAllPreviews() {
+        for id in Array(previewing) {
+            guard let config = configs.first(where: { $0.id == id }) else { continue }
+            dlog("refreshAllPreviews → restart \(String(id.uuidString.prefix(8)))")
+            restartPreviewDebounced(for: config)
         }
     }
 

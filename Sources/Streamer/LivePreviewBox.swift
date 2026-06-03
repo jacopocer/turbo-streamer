@@ -42,6 +42,24 @@ struct PreviewPanel: View {
         let configs = manager.configs.filter { manager.isPreviewing($0.id) }
         VStack(spacing: 0) {
             resizeHandle
+            HStack {
+                Button {
+                    manager.refreshAllPreviews()
+                } label: {
+                    Label("Refresh Preview", systemImage: "arrow.clockwise")
+                        .font(.custom("SofiaPro-SemiBold", size: 11))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Apply font/size/colour/position/source changes to the preview")
+                Text("Text updates live · other changes apply on Refresh")
+                    .font(.custom("SofiaPro", size: 10))
+                    .foregroundStyle(Color.white.opacity(0.35))
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 6)
+
             HStack(alignment: .top, spacing: 10) {
                 ForEach(configs) { cfg in
                     VStack(spacing: 4) {
