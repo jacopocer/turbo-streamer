@@ -34,6 +34,7 @@ final class StreamManager: ObservableObject {
     @Published private(set) var previewing: Set<UUID>     = []     // configs with a live preview running
     private var previewProcesses: [UUID: Process]         = [:]
     private var previewPipes:     [UUID: Pipe]            = [:]
+    private var previewRestartTasks: [UUID: Task<Void, Never>] = [:]
     private let registry = ProcessRegistry()
 
     /// No video frames for this long ⇒ input is stalled/hung ⇒ force a restart.
@@ -840,10 +841,11 @@ final class StreamManager: ObservableObject {
             withIntermediateDirectories: true)
         try? config.overlay.text.write(to: previewOverlayURL(for: id), atomically: true, encoding: .utf8)
 
-        var camFps = "30"
-        if config.inputType == .capture {
+        var camFps = captureFramerate[id] ?? "30"
+        if config.inputType == .capture, captureFramerate[id] == nil {
             await ensureCameraAccess()
             camFps = await probeCaptureFramerate(deviceIndex: config.videoDeviceIndex, target: Int(config.fps) ?? 30)
+            captureFramerate[id] = camFps   // cache so restarts don't re-probe
         }
         if previewProcesses[id] != nil { return }   // re-check after await
 
@@ -867,17 +869,39 @@ final class StreamManager: ObservableObject {
     }
 
     func stopPreview(_ id: UUID) {
+        previewRestartTasks[id]?.cancel(); previewRestartTasks[id] = nil
         if let p = previewProcesses[id] {
             previewProcesses[id] = nil
             if p.isRunning { p.terminate() }
         }
         previewPipes.removeValue(forKey: id)?.fileHandleForReading.readabilityHandler = nil
         previewing.remove(id)
+        captureFramerate[id] = nil
         try? FileManager.default.removeItem(at: previewImageURL(for: id))
     }
 
     func stopAllPreviews() {
-        for id in Array(previewProcesses.keys) { stopPreview(id) }
+        for id in Array(previewing) { stopPreview(id) }
+    }
+
+    /// Re-render the running preview (debounced) when something baked into the filter
+    /// changes — font/size/colour/position/resolution/source. Keeps the preview "live".
+    func restartPreviewDebounced(for config: StreamConfig) {
+        let id = config.id
+        guard previewing.contains(id) else { return }
+        previewRestartTasks[id]?.cancel()
+        previewRestartTasks[id] = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard let self, !Task.isCancelled, self.previewing.contains(id) else { return }
+            // Kill the current preview process but keep the `previewing` flag set
+            // (so the panel doesn't flicker), then relaunch with the new settings.
+            if let p = self.previewProcesses[id] {
+                self.previewProcesses[id] = nil
+                if p.isRunning { p.terminate() }
+            }
+            self.previewPipes.removeValue(forKey: id)?.fileHandleForReading.readabilityHandler = nil
+            await self.startPreview(for: config)
+        }
     }
 
     /// Live-update the preview's overlay text (drawtext reload picks it up).

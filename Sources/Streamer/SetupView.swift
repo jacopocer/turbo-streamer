@@ -50,6 +50,12 @@ struct SetupView: View {
             }
             .background(Color(red: 0.04, green: 0.04, blue: 0.04))
 
+            // ── Pinned live preview (stays put while settings scroll above) ──
+            if manager.anyPreviewing {
+                Divider().background(Color.white.opacity(0.08))
+                PreviewPanel()
+            }
+
             Divider().background(Color.white.opacity(0.08))
 
             // ── Footer ───────────────────────────────────────────────────────
