@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import AVFoundation
 
 @MainActor
 final class StreamManager: ObservableObject {
@@ -220,11 +221,48 @@ final class StreamManager: ObservableObject {
         }
     }
 
+    // MARK: - Capture permissions (TCC)
+
+    /// Requests camera access if needed. The app must request this itself so macOS
+    /// prompts and records the grant — the bundled ffmpeg subprocess then inherits it.
+    /// Enumerating devices works without permission, but *opening* the camera does not.
+    @discardableResult
+    func ensureCameraAccess() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized: return true
+        case .notDetermined:
+            return await withCheckedContinuation { c in
+                AVCaptureDevice.requestAccess(for: .video) { c.resume(returning: $0) }
+            }
+        default: return false   // denied / restricted
+        }
+    }
+
+    @discardableResult
+    func ensureMicAccess() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: return true
+        case .notDetermined:
+            return await withCheckedContinuation { c in
+                AVCaptureDevice.requestAccess(for: .audio) { c.resume(returning: $0) }
+            }
+        default: return false
+        }
+    }
+
+    var cameraAccessDenied: Bool {
+        let s = AVCaptureDevice.authorizationStatus(for: .video)
+        return s == .denied || s == .restricted
+    }
+
     // MARK: - Device listing
 
     /// Scans AVFoundation capture devices and populates the published lists.
     func refreshAVDevices() async {
         isScanningDevices = true
+        // Trigger the camera prompt while the user is browsing capture devices, so the
+        // grant is in place by the time they go live.
+        await ensureCameraAccess()
         let raw = await runFFmpegCapturingOutput(
             args: ["-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", "\"\""]
         )
@@ -368,6 +406,15 @@ final class StreamManager: ObservableObject {
         let id = record.id
 
         tasks[id] = Task {
+            // ── Pre-flight: camera/mic permission for capture inputs ──
+            if record.config.inputType == .capture {
+                let cam = await ensureCameraAccess()
+                if record.config.audioDeviceIndex.isEmpty == false { await ensureMicAccess() }
+                appendLog(cam
+                    ? "✓ Camera access granted."
+                    : "⚠ Camera access denied — enable this app under System Settings → Privacy & Security → Camera, then restart the stream.", to: id)
+            }
+
             // ── Pre-flight: is the destination reachable? (non-blocking, informational) ──
             appendLog("⏳ Pre-flight: checking \(record.config.rtmpURL)…", to: id)
             let reachable = await Preflight.isReachable(record.config.rtmpURL)
