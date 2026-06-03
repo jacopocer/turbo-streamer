@@ -60,6 +60,9 @@ final class StreamManager: ObservableObject {
             configs = saved
         }
 
+        // Fresh debug log each session
+        try? "=== session start \(Date()) ===\n".write(to: debugLogURL(), atomically: true, encoding: .utf8)
+
         installSleepObservers()
     }
 
@@ -827,6 +830,23 @@ final class StreamManager: ObservableObject {
         try? text.write(to: overlayTextURL(for: id), atomically: true, encoding: .utf8)
     }
 
+    // MARK: - Debug logging
+
+    private static let dbgFmt: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "HH:mm:ss.SSS"; return f
+    }()
+    private func debugLogURL() -> URL { logsDirectory().appendingPathComponent("preview-debug.log") }
+    func dlog(_ msg: String) {
+        let line = "[\(Self.dbgFmt.string(from: Date()))] \(msg)\n"
+        guard let data = line.data(using: .utf8) else { return }
+        let url = debugLogURL()
+        if let fh = try? FileHandle(forWritingTo: url) {
+            fh.seekToEndOfFile(); fh.write(data); try? fh.close()
+        } else {
+            try? data.write(to: url)
+        }
+    }
+
     // MARK: - Live preview (local, never streamed)
 
     /// Where each config's running preview frames are written (overwritten ~12×/sec).
@@ -847,7 +867,12 @@ final class StreamManager: ObservableObject {
     /// Start a live local preview of the composed output (source + overlay), no RTMP.
     func startPreview(for config: StreamConfig) async {
         let id = config.id
-        guard previewProcesses[id] == nil else { return }
+        let short = String(id.uuidString.prefix(8))
+        guard previewProcesses[id] == nil else {
+            dlog("startPreview[\(short)] SKIPPED — process already exists")
+            return
+        }
+        dlog("startPreview[\(short)] BEGIN  input=\(config.inputType.rawValue) overlay=\(config.overlay.enabled) size=\(config.overlay.fontSize) color=\(config.overlay.colorHex)")
 
         try? FileManager.default.createDirectory(
             at: baseDirectory(.cachesDirectory).appendingPathComponent("TurboStreamer"),
@@ -858,30 +883,52 @@ final class StreamManager: ObservableObject {
         if config.inputType == .capture, captureFramerate[id] == nil {
             await ensureCameraAccess()
             camFps = await probeCaptureFramerate(deviceIndex: config.videoDeviceIndex, target: Int(config.fps) ?? 30)
-            captureFramerate[id] = camFps   // cache so restarts don't re-probe
+            captureFramerate[id] = camFps
+            dlog("startPreview[\(short)] probed camFps=\(camFps)")
         }
-        if previewProcesses[id] != nil { return }   // re-check after await
+        if previewProcesses[id] != nil {
+            dlog("startPreview[\(short)] ABORT after await — process appeared")
+            return
+        }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ffmpegPath)
-        process.arguments     = buildPreviewArgs(for: config, captureFPS: camFps)
+        let pargs = buildPreviewArgs(for: config, captureFPS: camFps)
+        process.arguments     = pargs
         process.standardInput = FileHandle.nullDevice
         if let env = subprocessEnvironment() { process.environment = env }
+        dlog("startPreview[\(short)] ARGS: \(pargs.joined(separator: " "))")
 
         let sink = Pipe()
         process.standardOutput = sink
         process.standardError  = sink
-        sink.fileHandleForReading.readabilityHandler = { h in _ = h.availableData }
+        sink.fileHandleForReading.readabilityHandler = { [weak self] h in
+            let d = h.availableData
+            guard !d.isEmpty, let s = String(data: d, encoding: .utf8) else { return }
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !t.isEmpty, let self else { return }
+            Task { @MainActor in self.dlog("  preview[\(short)] ffmpeg: \(t)") }
+        }
+        process.terminationHandler = { [weak self] p in
+            let code = p.terminationStatus
+            guard let self else { return }
+            Task { @MainActor in self.dlog("  preview[\(short)] EXITED code=\(code)") }
+        }
 
         do {
             try process.run()
             previewProcesses[id] = process
             previewPipes[id]     = sink
             previewing.insert(id)
-        } catch { /* preview is best-effort */ }
+            dlog("startPreview[\(short)] LAUNCHED pid=\(process.processIdentifier)")
+        } catch {
+            dlog("startPreview[\(short)] LAUNCH FAILED: \(error.localizedDescription)")
+        }
     }
 
     func stopPreview(_ id: UUID) {
+        let short = String(id.uuidString.prefix(8))
+        dlog("stopPreview[\(short)]")
         previewRestartTasks[id]?.cancel(); previewRestartTasks[id] = nil
         if let p = previewProcesses[id] {
             previewProcesses[id] = nil
@@ -901,29 +948,36 @@ final class StreamManager: ObservableObject {
     /// changes — font/size/colour/position/resolution/source. Keeps the preview "live".
     func restartPreviewDebounced(for config: StreamConfig) {
         let id = config.id
-        guard previewing.contains(id) else { return }
+        let short = String(id.uuidString.prefix(8))
+        guard previewing.contains(id) else {
+            dlog("restartDebounced[\(short)] IGNORED — not previewing")
+            return
+        }
+        dlog("restartDebounced[\(short)] scheduled (size=\(config.overlay.fontSize) color=\(config.overlay.colorHex))")
         previewRestartTasks[id]?.cancel()
         previewRestartTasks[id] = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(350))
-            guard let self, !Task.isCancelled, self.previewing.contains(id) else { return }
-            // Kill the current preview process but keep the `previewing` flag set
-            // (so the panel doesn't flicker), then relaunch with the new settings.
+            guard let self else { return }
+            if Task.isCancelled { self.dlog("restart[\(short)] cancelled before kill"); return }
+            guard self.previewing.contains(id) else { self.dlog("restart[\(short)] not previewing"); return }
             if let p = self.previewProcesses[id] {
                 self.previewProcesses[id] = nil
+                self.dlog("restart[\(short)] terminating old pid=\(p.processIdentifier) running=\(p.isRunning)")
                 if p.isRunning { p.terminate() }
-                // Wait for it to actually exit — a capture device isn't released until
-                // the old ffmpeg dies, and the new one can't open it until then.
-                for _ in 0 ..< 40 {
+                var waited = 0
+                for _ in 0 ..< 60 {
                     if !p.isRunning { break }
-                    try? await Task.sleep(for: .milliseconds(50))
+                    try? await Task.sleep(for: .milliseconds(50)); waited += 50
                 }
+                self.dlog("restart[\(short)] old exited after \(waited)ms, running=\(p.isRunning)")
+            } else {
+                self.dlog("restart[\(short)] no old process tracked")
             }
             self.previewPipes.removeValue(forKey: id)?.fileHandleForReading.readabilityHandler = nil
-            // Clear the cached framerate so the relaunch RE-PROBES the camera — this is
-            // what the working manual restart does; it cleanly releases & re-acquires the
-            // device. Skipping it (using the cache) relaunched too fast → camera busy → freeze.
             self.captureFramerate[id] = nil
-            if Task.isCancelled || !self.previewing.contains(id) { return }
+            if Task.isCancelled { self.dlog("restart[\(short)] cancelled before relaunch"); return }
+            guard self.previewing.contains(id) else { self.dlog("restart[\(short)] not previewing before relaunch"); return }
+            self.dlog("restart[\(short)] relaunching…")
             await self.startPreview(for: config)
         }
     }
@@ -949,15 +1003,21 @@ final class StreamManager: ObservableObject {
     /// Driven from configs.didSet so it fires reliably on every edit.
     private func syncPreviewsToConfigChanges(old: [StreamConfig]) {
         guard !previewing.isEmpty else { return }
+        dlog("configs.didSet — previewing=\(previewing.map { String($0.uuidString.prefix(8)) })")
         for id in previewing {
-            guard let newC = configs.first(where: { $0.id == id }) else { continue }
+            let short = String(id.uuidString.prefix(8))
+            guard let newC = configs.first(where: { $0.id == id }) else {
+                dlog("  sync[\(short)]: config gone"); continue
+            }
             let oldC = old.first(where: { $0.id == id })
-            if newC.overlay.text != (oldC?.overlay.text ?? "") {
-                updatePreviewOverlayText(newC.overlay.text, for: id)
-            }
-            if previewStyleSignature(oldC) != previewStyleSignature(newC) {
-                restartPreviewDebounced(for: newC)
-            }
+            let textChanged = newC.overlay.text != (oldC?.overlay.text ?? "")
+            let oldSig = previewStyleSignature(oldC)
+            let newSig = previewStyleSignature(newC)
+            let styleChanged = oldSig != newSig
+            dlog("  sync[\(short)]: textChanged=\(textChanged) styleChanged=\(styleChanged)")
+            if styleChanged { dlog("    old=\(oldSig)\n    new=\(newSig)") }
+            if textChanged { updatePreviewOverlayText(newC.overlay.text, for: id) }
+            if styleChanged { restartPreviewDebounced(for: newC) }
         }
     }
 
