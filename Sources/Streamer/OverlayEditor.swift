@@ -38,9 +38,6 @@ struct OverlayEditor: View {
                     .background(Color.black.opacity(0.4))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.12), lineWidth: 1))
-                    .onChange(of: config.overlay.text) { newText in
-                        manager.updatePreviewOverlayText(newText, for: config.id)   // live in preview
-                    }
 
                 // ── Font ─────────────────────────────────────────────────────
                 HStack(spacing: 12) {

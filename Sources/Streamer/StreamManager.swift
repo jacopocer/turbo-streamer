@@ -8,7 +8,7 @@ final class StreamManager: ObservableObject {
     // MARK: - Published state
 
     @Published var configs: [StreamConfig] = [StreamConfig(index: 1)] {
-        didSet { saveConfigs() }
+        didSet { saveConfigs(); syncPreviewsToConfigChanges(old: oldValue) }
     }
     @Published private(set) var runningStreams: [RunningStreamRecord] = []
     @Published private(set) var statuses: [UUID: StreamStatus]  = [:]
@@ -915,6 +915,33 @@ final class StreamManager: ObservableObject {
     func updatePreviewOverlayText(_ text: String, for configID: UUID) {
         guard previewing.contains(configID) else { return }
         try? text.write(to: previewOverlayURL(for: configID), atomically: true, encoding: .utf8)
+    }
+
+    /// Everything baked into the preview render (excludes overlay text, which reloads live).
+    private func previewStyleSignature(_ c: StreamConfig?) -> String {
+        guard let c else { return "" }
+        let o = c.overlay
+        return [c.resolution.rawValue, c.inputType.rawValue, c.filePath, c.videoDeviceIndex,
+                c.deckLinkDeviceName, "\(o.enabled)", o.fontChoice, o.customFontPath, "\(o.fontSize)",
+                o.colorHex, o.position.rawValue, "\(o.boxEnabled)", String(format: "%.2f", o.boxOpacity)]
+            .joined(separator: "|")
+    }
+
+    /// Whenever a config is edited, push the change into its running preview:
+    /// text reloads instantly; anything baked into the filter triggers a re-render.
+    /// Driven from configs.didSet so it fires reliably on every edit.
+    private func syncPreviewsToConfigChanges(old: [StreamConfig]) {
+        guard !previewing.isEmpty else { return }
+        for id in previewing {
+            guard let newC = configs.first(where: { $0.id == id }) else { continue }
+            let oldC = old.first(where: { $0.id == id })
+            if newC.overlay.text != (oldC?.overlay.text ?? "") {
+                updatePreviewOverlayText(newC.overlay.text, for: id)
+            }
+            if previewStyleSignature(oldC) != previewStyleSignature(newC) {
+                restartPreviewDebounced(for: newC)
+            }
+        }
     }
 
     private func buildPreviewArgs(for config: StreamConfig, captureFPS: String) -> [String] {
