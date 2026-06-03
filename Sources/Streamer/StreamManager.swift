@@ -891,15 +891,22 @@ final class StreamManager: ObservableObject {
         guard previewing.contains(id) else { return }
         previewRestartTasks[id]?.cancel()
         previewRestartTasks[id] = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(400))
+            try? await Task.sleep(for: .milliseconds(350))
             guard let self, !Task.isCancelled, self.previewing.contains(id) else { return }
             // Kill the current preview process but keep the `previewing` flag set
             // (so the panel doesn't flicker), then relaunch with the new settings.
             if let p = self.previewProcesses[id] {
                 self.previewProcesses[id] = nil
                 if p.isRunning { p.terminate() }
+                // Wait for it to actually exit — a capture device isn't released until
+                // the old ffmpeg dies, and the new one can't open it until then.
+                for _ in 0 ..< 40 {
+                    if !p.isRunning { break }
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
             }
             self.previewPipes.removeValue(forKey: id)?.fileHandleForReading.readabilityHandler = nil
+            if Task.isCancelled || !self.previewing.contains(id) { return }
             await self.startPreview(for: config)
         }
     }
