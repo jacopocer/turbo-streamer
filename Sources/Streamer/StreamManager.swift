@@ -919,6 +919,10 @@ final class StreamManager: ObservableObject {
                 }
             }
             self.previewPipes.removeValue(forKey: id)?.fileHandleForReading.readabilityHandler = nil
+            // Clear the cached framerate so the relaunch RE-PROBES the camera — this is
+            // what the working manual restart does; it cleanly releases & re-acquires the
+            // device. Skipping it (using the cache) relaunched too fast → camera busy → freeze.
+            self.captureFramerate[id] = nil
             if Task.isCancelled || !self.previewing.contains(id) { return }
             await self.startPreview(for: config)
         }
