@@ -69,6 +69,45 @@ enum RTMPPreset: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+// MARK: - Text overlay
+
+enum OverlayPosition: String, CaseIterable, Identifiable, Codable {
+    case top    = "Top"
+    case center = "Center"
+    case bottom = "Bottom"
+    var id: String { rawValue }
+
+    /// ffmpeg drawtext `y` expression (text is horizontally centered separately).
+    var yExpr: String {
+        switch self {
+        case .top:    return "h*0.08"
+        case .center: return "(h-text_h)/2"
+        case .bottom: return "h-text_h-(h*0.08)"
+        }
+    }
+}
+
+struct TextOverlay: Codable, Equatable {
+    var enabled: Bool          = false
+    var text: String           = ""
+    var fontChoice: String     = "Sofia Pro Bold"   // a bundled name or "Custom"
+    var customFontPath: String = ""
+    var fontSize: Int          = 54
+    var colorHex: String       = "FFFFFF"
+    var position: OverlayPosition = .bottom
+    var boxEnabled: Bool       = true
+    var boxOpacity: Double     = 0.55
+
+    /// Built-in fonts (display name → bundled file in Contents/Resources/Fonts).
+    static let bundledFonts: [(name: String, file: String)] = [
+        ("Sofia Pro Regular", "Sofia Pro Regular Az.otf"),
+        ("Sofia Pro Medium",  "Sofia Pro Medium Az.otf"),
+        ("Sofia Pro Bold",    "Sofia Pro Bold Az.otf"),
+        ("Bello Pro (script)", "bellopro.otf"),
+    ]
+    static let customFontLabel = "Custom…"
+}
+
 // MARK: - Stream configuration (struct so SwiftUI bindings work cleanly)
 
 struct StreamConfig: Identifiable, Codable {
@@ -94,6 +133,9 @@ struct StreamConfig: Identifiable, Codable {
     var fallbackMediaPath: String     = ""    // optional custom card; empty = use most recent captured frame
     var adaptiveBitrate: Bool         = false // step bitrate down on instability, back up when stable
 
+    // Text overlay (lower-third / standby messaging, editable live)
+    var overlay: TextOverlay          = TextOverlay()
+
     init(index: Int = 1) {
         self.id   = UUID()
         self.name = "Stream \(index)"
@@ -105,7 +147,7 @@ struct StreamConfig: Identifiable, Codable {
         case id, name, rtmpPreset, rtmpURL, streamKey, videoBitrate, audioBitrate, fps,
              resolution, inputType, filePath, videoDeviceIndex, audioDeviceIndex,
              deckLinkDeviceName, backupRTMPURL, safetyRecording, fallbackEnabled,
-             fallbackMediaPath, adaptiveBitrate
+             fallbackMediaPath, adaptiveBitrate, overlay
     }
 
     init(from decoder: Decoder) throws {
@@ -129,6 +171,7 @@ struct StreamConfig: Identifiable, Codable {
         fallbackEnabled    = (try? c.decode(Bool.self,            forKey: .fallbackEnabled)) ?? false
         fallbackMediaPath  = (try? c.decode(String.self,          forKey: .fallbackMediaPath)) ?? ""
         adaptiveBitrate    = (try? c.decode(Bool.self,            forKey: .adaptiveBitrate)) ?? false
+        overlay            = (try? c.decode(TextOverlay.self,     forKey: .overlay)) ?? TextOverlay()
     }
 }
 

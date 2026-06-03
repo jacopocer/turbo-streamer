@@ -28,6 +28,7 @@ final class StreamManager: ObservableObject {
     private var lastProgressAt: [UUID: Date]              = [:]
     private var slateProcesses: [UUID: Process]           = [:]
     private var slatePipes:     [UUID: Pipe]              = [:]
+    private var overlayText:    [UUID: String]            = [:]   // live overlay text per stream
     private let registry = ProcessRegistry()
 
     /// No video frames for this long ⇒ input is stalled/hung ⇒ force a restart.
@@ -167,6 +168,7 @@ final class StreamManager: ObservableObject {
             runningStreams.append(record)
             statuses[record.id]   = StreamStatus()
             stopFlags[record.id]  = false
+            overlayText[record.id] = config.overlay.text   // seed live overlay text
 
             FileManager.default.createFile(atPath: logURL.path, contents: nil)
             logFileHandles[record.id] = FileHandle(forWritingAtPath: logURL.path)
@@ -212,7 +214,9 @@ final class StreamManager: ObservableObject {
             logFileHandles[id]  = nil
             slatePipes.removeValue(forKey: id)?.fileHandleForReading.readabilityHandler = nil
             slateProcesses[id]  = nil
+            overlayText[id]     = nil
             try? FileManager.default.removeItem(at: snapshotPath(for: id))  // free cached frame
+            try? FileManager.default.removeItem(at: overlayTextURL(for: id))
         }
     }
 
@@ -461,8 +465,20 @@ final class StreamManager: ObservableObject {
         let config = record.config
         let recordingURL = config.safetyRecording ? makeRecordingURL(for: config) : nil
         let snapURL      = config.fallbackEnabled ? snapshotPath(for: id) : nil
-        let args   = buildArgs(for: config, recordingURL: recordingURL,
-                               bitrateOverride: bitrate, snapshotURL: snapURL)
+
+        // Overlay: write the *current* (possibly live-edited) text to the reload file
+        // each launch, so a reconnect preserves whatever is on-air rather than resetting.
+        var overlayURL: URL? = nil
+        if config.overlay.enabled {
+            let url = overlayTextURL(for: id)
+            let text = overlayText[id] ?? config.overlay.text
+            try? text.write(to: url, atomically: true, encoding: .utf8)
+            overlayURL = url
+        }
+
+        let args = buildArgs(for: config, recordingURL: recordingURL,
+                             bitrateOverride: bitrate, snapshotURL: snapURL,
+                             overlayTextURL: overlayURL)
 
         if let rec = recordingURL {
             appendLog("● Safety recording → \(rec.path)", to: id)
@@ -673,9 +689,90 @@ final class StreamManager: ObservableObject {
         return dir.appendingPathComponent("latest_\(id.uuidString).jpg")
     }
 
+    // MARK: - Text overlay
+
+    /// Per-stream text file that drawtext re-reads live (reload=1).
+    private func overlayTextURL(for id: UUID) -> URL {
+        let dir = baseDirectory(.cachesDirectory).appendingPathComponent("TurboStreamer")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("overlay_\(id.uuidString).txt")
+    }
+
+    /// Resolve an overlay's font to an absolute file path (bundled or custom).
+    func fontPath(for overlay: TextOverlay) -> String? {
+        if overlay.fontChoice == TextOverlay.customFontLabel {
+            let p = overlay.customFontPath
+            return (!p.isEmpty && FileManager.default.fileExists(atPath: p)) ? p : nil
+        }
+        guard let match = TextOverlay.bundledFonts.first(where: { $0.name == overlay.fontChoice })
+            ?? TextOverlay.bundledFonts.first else { return nil }
+        let p = Bundle.main.bundlePath + "/Contents/Resources/Fonts/" + match.file
+        return FileManager.default.fileExists(atPath: p) ? p : nil
+    }
+
+    /// Build the drawtext filter from overlay settings, reading text from `textPath`.
+    private func drawtextFilter(for overlay: TextOverlay, textPath: String) -> String? {
+        guard overlay.enabled, let font = fontPath(for: overlay) else { return nil }
+        let size  = max(8, overlay.fontSize)
+        let hex   = overlay.colorHex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        var f = "drawtext=textfile='\(textPath)':reload=1"
+        f += ":fontfile='\(font)'"
+        f += ":fontcolor=0x\(hex.isEmpty ? "FFFFFF" : hex)"
+        f += ":fontsize=\(size)"
+        f += ":x=(w-text_w)/2:y=\(overlay.position.yExpr)"
+        f += ":line_spacing=10"
+        if overlay.boxEnabled {
+            let op = String(format: "%.2f", min(max(overlay.boxOpacity, 0), 1))
+            f += ":box=1:boxcolor=black@\(op):boxborderw=28"
+        }
+        return f
+    }
+
+    /// Update the on-air overlay text live (drawtext picks it up within a frame).
+    func setOverlayText(_ text: String, for id: UUID) {
+        overlayText[id] = text
+        try? text.write(to: overlayTextURL(for: id), atomically: true, encoding: .utf8)
+    }
+
+    // MARK: - Preview (before going live)
+
+    /// Renders a single frame of (source + overlay) exactly as ffmpeg will stream it.
+    /// Falls back to a neutral background if no live source is available.
+    func renderPreview(for config: StreamConfig) async -> NSImage? {
+        let dir = baseDirectory(.cachesDirectory).appendingPathComponent("TurboStreamer")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let textURL = dir.appendingPathComponent("preview_\(config.id.uuidString).txt")
+        let outURL  = dir.appendingPathComponent("preview_\(config.id.uuidString).png")
+        try? FileManager.default.removeItem(at: outURL)
+        try? config.overlay.text.write(to: textURL, atomically: true, encoding: .utf8)
+
+        let (w, h) = config.resolution.outputDimensions
+        var args = ["-hide_banner", "-loglevel", "error"]
+
+        // Pick a source frame; fall back to a neutral background for text-only preview.
+        if config.inputType == .file, !config.filePath.isEmpty,
+           FileManager.default.fileExists(atPath: config.filePath) {
+            args += ["-ss", "1", "-i", config.filePath]
+        } else if config.inputType == .decklink, !config.deckLinkDeviceName.isEmpty {
+            args += ["-f", "decklink", "-i", config.deckLinkDeviceName]
+        } else if config.inputType == .capture {
+            args += ["-f", "avfoundation", "-video_size", config.resolution.captureSize,
+                     "-framerate", config.fps, "-i", "\(config.videoDeviceIndex):none"]
+        } else {
+            args += ["-f", "lavfi", "-i", "color=c=0x1a1a1a:s=\(w)x\(h)"]
+        }
+
+        var vf = config.resolution.scaleFilter
+        if let dt = drawtextFilter(for: config.overlay, textPath: textURL.path) { vf += ",\(dt)" }
+        args += ["-frames:v", "1", "-vf", vf, "-y", outURL.path]
+
+        _ = await runFFmpegCapturingOutput(args: args)
+        return NSImage(contentsOfFile: outURL.path)
+    }
+
     // MARK: - Private: argument builder
 
-    private func buildArgs(for config: StreamConfig, recordingURL: URL?, bitrateOverride: String? = nil, snapshotURL: URL? = nil) -> [String] {
+    private func buildArgs(for config: StreamConfig, recordingURL: URL?, bitrateOverride: String? = nil, snapshotURL: URL? = nil, overlayTextURL: URL? = nil) -> [String] {
         let videoBitrate = bitrateOverride ?? config.videoBitrate
         let bitrateNum = Int(videoBitrate.replacingOccurrences(of: "k", with: "")) ?? 4500
         let bufsize    = "\(bitrateNum * 2)k"
@@ -712,9 +809,13 @@ final class StreamManager: ObservableObject {
             ]
         }
 
-        // ── Video filter: scale + content detectors (freeze / black) ────────
+        // ── Video filter: scale + content detectors (freeze / black) + overlay ──
         let detectors   = "freezedetect=n=-60dB:d=3,blackdetect=d=3"
-        let videoFilter = "\(config.resolution.scaleFilter),\(detectors)"
+        var videoFilter = "\(config.resolution.scaleFilter),\(detectors)"
+        if let textURL = overlayTextURL,
+           let dt = drawtextFilter(for: config.overlay, textPath: textURL.path) {
+            videoFilter += ",\(dt)"   // text overlay drawn last, on top of everything
+        }
 
         // ── Encoder (auto-selected by resolution) ───────────────────────────
         func encoderArgs() -> [String] {

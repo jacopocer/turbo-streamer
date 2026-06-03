@@ -5,7 +5,12 @@ struct StreamStatusCard: View {
     let status: StreamStatus
     let onStop: () -> Void
 
+    @EnvironmentObject var manager: StreamManager
     @State private var showLog = false
+    @State private var showOverlayEditor = false
+    @State private var overlayDraft = ""
+
+    private let overlayPresets = ["Starting soon", "We'll be right back", "Technical difficulties"]
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -52,6 +57,18 @@ struct StreamStatusCard: View {
 
                 Spacer()
 
+                // Live overlay toggle (only if this stream was started with overlay enabled)
+                if record.config.overlay.enabled {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) { showOverlayEditor.toggle() }
+                    } label: {
+                        Label("Overlay", systemImage: "textformat")
+                            .font(.custom("SofiaPro", size: 11))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+
                 // Log toggle
                 Button {
                     withAnimation(.easeInOut(duration: 0.15)) { showLog.toggle() }
@@ -74,6 +91,13 @@ struct StreamStatusCard: View {
                 .disabled(!status.phase.isActive)
             }
             .padding(14)
+
+            // ── Live overlay editor ───────────────────────────────────────────
+            if showOverlayEditor, record.config.overlay.enabled {
+                Divider().background(Color.white.opacity(0.07))
+                liveOverlayPanel
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
 
             // ── Log file path ─────────────────────────────────────────────────
             HStack(spacing: 4) {
@@ -116,6 +140,41 @@ struct StreamStatusCard: View {
                 .foregroundStyle(phaseColor)
                 .font(.system(size: 14, weight: .semibold))
         }
+    }
+
+    @ViewBuilder
+    private var liveOverlayPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("ON-AIR TEXT — changes apply live")
+                .font(.custom("SofiaPro-SemiBold", size: 10))
+                .foregroundStyle(Color.white.opacity(0.3)).kerning(1.0)
+
+            HStack(spacing: 8) {
+                TextField("Type a message to show on-air…", text: $overlayDraft, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(1...3)
+                    .onSubmit { manager.setOverlayText(overlayDraft, for: record.id) }
+                Button("Show") { manager.setOverlayText(overlayDraft, for: record.id) }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+                Button("Clear") { overlayDraft = ""; manager.setOverlayText("", for: record.id) }
+                    .buttonStyle(.bordered).controlSize(.small)
+            }
+
+            HStack(spacing: 6) {
+                ForEach(overlayPresets, id: \.self) { preset in
+                    Button(preset) {
+                        overlayDraft = preset
+                        manager.setOverlayText(preset, for: record.id)
+                    }
+                    .buttonStyle(.bordered).controlSize(.mini)
+                    .font(.custom("SofiaPro", size: 10))
+                }
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .onAppear { if overlayDraft.isEmpty { overlayDraft = record.config.overlay.text } }
     }
 
     @ViewBuilder
