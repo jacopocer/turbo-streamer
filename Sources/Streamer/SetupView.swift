@@ -61,6 +61,23 @@ struct SetupView: View {
                 }
                 Spacer()
                 Button {
+                    if manager.anyPreviewing {
+                        manager.stopAllPreviews()
+                    } else {
+                        for config in manager.configs {
+                            Task { await manager.startPreview(for: config) }
+                        }
+                    }
+                } label: {
+                    Label(manager.anyPreviewing ? "Stop Preview" : "Preview Streams",
+                          systemImage: manager.anyPreviewing ? "eye.slash" : "eye")
+                        .font(.custom("SofiaPro-SemiBold", size: 14))
+                        .frame(minWidth: 150)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+
+                Button {
                     manager.startStreams()
                 } label: {
                     Label("Start Streams", systemImage: "play.fill")

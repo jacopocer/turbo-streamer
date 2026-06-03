@@ -195,6 +195,15 @@ struct StreamConfigCard: View {
                     captureInputSection
                 }
             }
+
+            // ── Live preview (when previewing) ─────────────────────────────────
+            if manager.isPreviewing(config.id) {
+                divider
+                sectionContent {
+                    sectionHeader("Live Preview")
+                    LivePreviewBox(configID: config.id)
+                }
+            }
         }
         .background(Color(red: 0.10, green: 0.10, blue: 0.10))
         .clipShape(RoundedRectangle(cornerRadius: 10))

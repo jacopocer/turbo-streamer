@@ -20,7 +20,8 @@ A native macOS SwiftUI shell that orchestrates **bundled ffmpeg** subprocesses. 
 | Bitrate | ✅ | Auto-fills per resolution (1080p 5872k, 4K 16000k) |
 | Settings | ✅ | Persist across launches; resilient decode (updates won't wipe them) |
 | Live metrics | ✅ | Uptime · fps · bitrate · speed per stream |
-| Text overlay | ✅ | Lower-third/standby text — font (bundled or **upload your own**), size, colour, position, multi-line, background box; **live-editable on-air** + ffmpeg-rendered **preview** before going live |
+| Live preview | ✅ | **Preview Streams** (next to Start) shows each stream's composed output running live & resizable, before going live — overlay included |
+| Text overlay | ✅ | Lower-third/standby text — font (bundled or **upload your own**), size, colour, position, multi-line, background box; **live-editable on-air**, shown in the live preview |
 | Branding | ✅ | Dark theme, Sofia Pro + Bello Pro fonts; health-reactive wobbling icon |
 
 ### Failsafe / reliability
