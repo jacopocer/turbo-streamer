@@ -30,6 +30,7 @@ final class StreamManager: ObservableObject {
     private var slateProcesses: [UUID: Process]           = [:]
     private var slatePipes:     [UUID: Pipe]              = [:]
     private var overlayText:    [UUID: String]            = [:]   // live overlay text per stream
+    private var captureFramerate: [UUID: String]          = [:]   // device-supported fps, probed once
     private let registry = ProcessRegistry()
 
     /// No video frames for this long ⇒ input is stalled/hung ⇒ force a restart.
@@ -216,6 +217,7 @@ final class StreamManager: ObservableObject {
             slatePipes.removeValue(forKey: id)?.fileHandleForReading.readabilityHandler = nil
             slateProcesses[id]  = nil
             overlayText[id]     = nil
+            captureFramerate[id] = nil
             try? FileManager.default.removeItem(at: snapshotPath(for: id))  // free cached frame
             try? FileManager.default.removeItem(at: overlayTextURL(for: id))
         }
@@ -253,6 +255,28 @@ final class StreamManager: ObservableObject {
     var cameraAccessDenied: Bool {
         let s = AVCaptureDevice.authorizationStatus(for: .video)
         return s == .denied || s == .restricted
+    }
+
+    /// AVFoundation rejects any framerate the device doesn't natively support (the
+    /// FaceTime camera, for example, does 15/30 only — not 25 or the 29.97 default).
+    /// Probe the device's supported framerates and return the one closest to `target`.
+    func probeCaptureFramerate(deviceIndex: String, target: Int) async -> String {
+        // Opening with no framerate fails fast AND prints the supported modes.
+        let raw = await runFFmpegCapturingOutput(
+            args: ["-hide_banner", "-f", "avfoundation", "-i", deviceIndex])
+        var rates = Set<Int>()
+        for line in raw.components(separatedBy: "\n") {
+            guard let at = line.range(of: "@[") else { continue }
+            let after = line[at.upperBound...]
+            guard let rb = after.firstIndex(of: "]") else { continue }
+            for tok in after[after.startIndex..<rb].split(separator: " ") {
+                if let d = Double(tok) { rates.insert(Int(d.rounded())) }
+            }
+        }
+        guard let best = rates.min(by: { abs($0 - target) < abs($1 - target) }) else {
+            return "30"   // sensible default if the device didn't report modes
+        }
+        return String(best)
     }
 
     // MARK: - Device listing
@@ -406,13 +430,17 @@ final class StreamManager: ObservableObject {
         let id = record.id
 
         tasks[id] = Task {
-            // ── Pre-flight: camera/mic permission for capture inputs ──
+            // ── Pre-flight: camera/mic permission + supported framerate for capture ──
             if record.config.inputType == .capture {
                 let cam = await ensureCameraAccess()
                 if record.config.audioDeviceIndex.isEmpty == false { await ensureMicAccess() }
                 appendLog(cam
                     ? "✓ Camera access granted."
                     : "⚠ Camera access denied — enable this app under System Settings → Privacy & Security → Camera, then restart the stream.", to: id)
+                let target = Int(record.config.fps) ?? 30
+                let chosen = await probeCaptureFramerate(deviceIndex: record.config.videoDeviceIndex, target: target)
+                captureFramerate[id] = chosen
+                appendLog("✓ Camera input at \(chosen) fps (closest mode the device supports to \(target)).", to: id)
             }
 
             // ── Pre-flight: is the destination reachable? (non-blocking, informational) ──
@@ -525,7 +553,7 @@ final class StreamManager: ObservableObject {
 
         let args = buildArgs(for: config, recordingURL: recordingURL,
                              bitrateOverride: bitrate, snapshotURL: snapURL,
-                             overlayTextURL: overlayURL)
+                             overlayTextURL: overlayURL, captureFPS: captureFramerate[id])
 
         if let rec = recordingURL {
             appendLog("● Safety recording → \(rec.path)", to: id)
@@ -803,7 +831,10 @@ final class StreamManager: ObservableObject {
         } else if config.inputType == .decklink, !config.deckLinkDeviceName.isEmpty {
             args += ["-f", "decklink", "-i", config.deckLinkDeviceName]
         } else if config.inputType == .capture {
-            args += ["-f", "avfoundation", "-i", "\(config.videoDeviceIndex):none"]
+            await ensureCameraAccess()
+            let camFps = await probeCaptureFramerate(deviceIndex: config.videoDeviceIndex,
+                                                     target: Int(config.fps) ?? 30)
+            args += ["-f", "avfoundation", "-framerate", camFps, "-i", "\(config.videoDeviceIndex):none"]
         } else {
             args += ["-f", "lavfi", "-i", "color=c=0x1a1a1a:s=\(w)x\(h)"]
         }
@@ -818,7 +849,7 @@ final class StreamManager: ObservableObject {
 
     // MARK: - Private: argument builder
 
-    private func buildArgs(for config: StreamConfig, recordingURL: URL?, bitrateOverride: String? = nil, snapshotURL: URL? = nil, overlayTextURL: URL? = nil) -> [String] {
+    private func buildArgs(for config: StreamConfig, recordingURL: URL?, bitrateOverride: String? = nil, snapshotURL: URL? = nil, overlayTextURL: URL? = nil, captureFPS: String? = nil) -> [String] {
         let videoBitrate = bitrateOverride ?? config.videoBitrate
         let bitrateNum = Int(videoBitrate.replacingOccurrences(of: "k", with: "")) ?? 4500
         let bufsize    = "\(bitrateNum * 2)k"
@@ -844,14 +875,15 @@ final class StreamManager: ObservableObject {
                 "-i", config.deckLinkDeviceName
             ]
         } else {
-            // AVFoundation capture: do NOT force -video_size/-framerate — many cameras
-            // (e.g. the built-in FaceTime camera) only support their own native modes and
-            // reject 1080p25. Let the device pick its default; the scale filter + output
-            // -r normalize to the chosen resolution/fps.
+            // AVFoundation capture: don't force a resolution, and use a framerate the
+            // device actually supports (probed). The default (29.97) and the app's 25
+            // are rejected by cameras like the FaceTime camera (15/30 only). The scale
+            // filter + output -r normalize to the chosen resolution/fps.
             let audio = config.audioDeviceIndex.isEmpty ? "none" : config.audioDeviceIndex
             args = [
                 "-hide_banner", "-loglevel", "info",
                 "-f", "avfoundation",
+                "-framerate", captureFPS ?? "30",
                 "-thread_queue_size", "1024",
                 "-i", "\(config.videoDeviceIndex):\(audio)"
             ]
