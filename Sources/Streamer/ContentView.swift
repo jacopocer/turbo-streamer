@@ -13,8 +13,7 @@ struct ContentView: View {
             Divider().background(Color.white.opacity(0.08))
             tabContent
         }
-        .frame(minWidth: 860, maxWidth: 860, maxHeight: .infinity)  // 860-wide column, fills window height
-        .frame(maxWidth: .infinity, maxHeight: .infinity)          // center the column; dark margins if wider
+        .frame(maxWidth: .infinity, maxHeight: .infinity)   // fill the window / full screen
         .background(Color(red: 0.04, green: 0.04, blue: 0.04))
     }
 
