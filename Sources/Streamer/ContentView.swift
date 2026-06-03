@@ -13,7 +13,7 @@ struct ContentView: View {
             Divider().background(Color.white.opacity(0.08))
             tabContent
         }
-        .frame(width: 860)
+        .frame(width: 860, height: 840)
         .background(Color(red: 0.04, green: 0.04, blue: 0.04))
     }
 

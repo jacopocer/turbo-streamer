@@ -195,15 +195,6 @@ struct StreamConfigCard: View {
                     captureInputSection
                 }
             }
-
-            // ── Live preview (when previewing) ─────────────────────────────────
-            if manager.isPreviewing(config.id) {
-                divider
-                sectionContent {
-                    sectionHeader("Live Preview")
-                    LivePreviewBox(configID: config.id)
-                }
-            }
         }
         .background(Color(red: 0.10, green: 0.10, blue: 0.10))
         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -213,6 +204,20 @@ struct StreamConfigCard: View {
         )
         .onAppear { scanIfNeeded() }
         .onChange(of: config.inputType) { _ in scanIfNeeded() }
+        // Apply non-text changes (size, colour, position, font, resolution, source) to a
+        // running preview in near-real-time. Text is handled live via reload separately.
+        .onChange(of: previewStyleKey) { _ in manager.restartPreviewDebounced(for: config) }
+    }
+
+    /// Signature of everything that's baked into the preview render (excludes overlay text,
+    /// which updates live without a restart).
+    private var previewStyleKey: String {
+        let o = config.overlay
+        return [config.resolution.rawValue, config.inputType.rawValue, config.filePath,
+                config.videoDeviceIndex, config.deckLinkDeviceName,
+                "\(o.enabled)", o.fontChoice, o.customFontPath, "\(o.fontSize)",
+                o.colorHex, o.position.rawValue, "\(o.boxEnabled)", String(format: "%.2f", o.boxOpacity)]
+            .joined(separator: "|")
     }
 
     // MARK: - File input
