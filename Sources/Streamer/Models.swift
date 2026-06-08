@@ -119,6 +119,7 @@ struct StreamConfig: Identifiable, Codable {
     var videoBitrate: String          = "5872k"
     var audioBitrate: String          = "128k"
     var fps: String                   = "25"
+    var fpsMatchSource: Bool          = false  // encode at the source's native rate; `fps` is the fallback
     var resolution: ResolutionPreset  = .hd
     var inputType: InputType          = .file
     var filePath: String              = ""
@@ -145,7 +146,7 @@ struct StreamConfig: Identifiable, Codable {
     // in future versions never wipes previously-saved configs.
     enum CodingKeys: String, CodingKey {
         case id, name, rtmpPreset, rtmpURL, streamKey, videoBitrate, audioBitrate, fps,
-             resolution, inputType, filePath, videoDeviceIndex, audioDeviceIndex,
+             fpsMatchSource, resolution, inputType, filePath, videoDeviceIndex, audioDeviceIndex,
              deckLinkDeviceName, backupRTMPURL, safetyRecording, fallbackEnabled,
              fallbackMediaPath, adaptiveBitrate, overlay
     }
@@ -160,6 +161,7 @@ struct StreamConfig: Identifiable, Codable {
         videoBitrate       = (try? c.decode(String.self,          forKey: .videoBitrate)) ?? "5872k"
         audioBitrate       = (try? c.decode(String.self,          forKey: .audioBitrate)) ?? "128k"
         fps                = (try? c.decode(String.self,          forKey: .fps)) ?? "25"
+        fpsMatchSource     = (try? c.decode(Bool.self,            forKey: .fpsMatchSource)) ?? false
         resolution         = (try? c.decode(ResolutionPreset.self, forKey: .resolution)) ?? .hd
         inputType          = (try? c.decode(InputType.self,       forKey: .inputType)) ?? .file
         filePath           = (try? c.decode(String.self,          forKey: .filePath)) ?? ""
@@ -172,6 +174,28 @@ struct StreamConfig: Identifiable, Codable {
         fallbackMediaPath  = (try? c.decode(String.self,          forKey: .fallbackMediaPath)) ?? ""
         adaptiveBitrate    = (try? c.decode(Bool.self,            forKey: .adaptiveBitrate)) ?? false
         overlay            = (try? c.decode(TextOverlay.self,     forKey: .overlay)) ?? TextOverlay()
+    }
+}
+
+// MARK: - RTMP URL helper
+
+extension StreamConfig {
+    /// Splits a combined "rtmp(s)://host/app/streamkey" into (base URL, stream key).
+    /// Returns nil unless it's an rtmp/rtmps URL with at least an app path + a key,
+    /// so a plain "rtmp://host/app" (no key) is left alone rather than mis-split.
+    static func splitRTMPURL(_ raw: String) -> (base: String, key: String)? {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = s.lowercased()
+        let scheme: String
+        if lower.hasPrefix("rtmps://")     { scheme = "rtmps://" }
+        else if lower.hasPrefix("rtmp://") { scheme = "rtmp://" }
+        else { return nil }
+        // parts[0] = host[:port]; the rest are path segments. Need host + app + key.
+        var parts = s.dropFirst(scheme.count).split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 3 else { return nil }
+        let key = parts.removeLast()
+        guard !key.isEmpty, !parts.contains(where: { $0.isEmpty }) else { return nil }
+        return (scheme + parts.joined(separator: "/"), key)
     }
 }
 
@@ -271,4 +295,12 @@ struct RunningStreamRecord: Identifiable {
     let config: StreamConfig
     let startedAt: Date
     let logFileURL: URL
+}
+
+// MARK: - Saved profile (named snapshot of all stream configs)
+
+struct Profile: Codable, Identifiable {
+    var id: String { name }
+    var name: String
+    var configs: [StreamConfig]
 }

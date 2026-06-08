@@ -17,3 +17,6 @@ Resources/Fonts/
 
 # Swift PM
 .swiftpm/
+
+# Claude Code session data / worktrees
+.claude/

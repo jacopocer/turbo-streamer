@@ -3,6 +3,8 @@ import SwiftUI
 struct SetupView: View {
     @EnvironmentObject var manager: StreamManager
     @State private var streamCount: Int = 1
+    @State private var showSaveProfile = false
+    @State private var newProfileName  = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -13,6 +15,9 @@ struct SetupView: View {
                     .font(.custom("SofiaPro", size: 13))
                     .foregroundStyle(Color.white.opacity(0.45))
                 Spacer()
+
+                profilesMenu
+
                 // Stream count controls
                 HStack(spacing: 6) {
                     Text("Streams:")
@@ -99,8 +104,21 @@ struct SetupView: View {
             .padding(.vertical, 14)
             .background(Color(red: 0.07, green: 0.07, blue: 0.07))
         }
+        .alert("Save profile", isPresented: $showSaveProfile) {
+            TextField("Profile name", text: $newProfileName)
+            Button("Save") {
+                manager.saveProfile(named: newProfileName)
+                newProfileName = ""
+            }
+            Button("Cancel", role: .cancel) { newProfileName = "" }
+        } message: {
+            Text("Save the current stream setup to reuse later.")
+        }
         .onChange(of: streamCount) { n in
             manager.setCount(n)
+        }
+        .onChange(of: manager.configs.count) { n in
+            streamCount = n
         }
         .onAppear {
             streamCount = manager.configs.count
@@ -108,6 +126,36 @@ struct SetupView: View {
     }
 
     // MARK: - Helpers
+
+    @ViewBuilder
+    private var profilesMenu: some View {
+        Menu {
+            Button {
+                showSaveProfile = true
+            } label: {
+                Label("Save current as…", systemImage: "square.and.arrow.down")
+            }
+            if !manager.savedProfileNames.isEmpty {
+                Divider()
+                Menu("Load") {
+                    ForEach(manager.savedProfileNames, id: \.self) { name in
+                        Button(name) { manager.loadProfile(named: name) }
+                    }
+                }
+                Menu("Delete") {
+                    ForEach(manager.savedProfileNames, id: \.self) { name in
+                        Button(name, role: .destructive) { manager.deleteProfile(named: name) }
+                    }
+                }
+            }
+        } label: {
+            Label("Profiles", systemImage: "square.stack.3d.up")
+                .font(.custom("SofiaPro", size: 12))
+                .foregroundStyle(Color.white.opacity(0.7))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
 
     private func setCount(_ n: Int) {
         streamCount = n

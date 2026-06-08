@@ -22,12 +22,12 @@ Repo: `github.com/jacopocer/turbo-streamer` (currently PUBLIC; owner is handling
 
 - `StreamerApp.swift` — `@main`; loads bundled fonts; window is resizable + full-screen capable.
 - `ContentView.swift` — root: header (wobbling app icon + Indigital logo top-right), custom two-tab bar, fills the window/full-screen.
-- `Models.swift` — `StreamConfig` (Codable with a RESILIENT custom decoder so adding fields never wipes saved configs), `TextOverlay`, `OverlayPosition`, `ResolutionPreset`/`RTMPPreset`/`InputType`, `StreamStatus` (parses ffmpeg progress for live metrics + freeze/black), `RunningStreamRecord`, `CaptureDevice`.
-- `StreamManager.swift` — everything dynamic. Largest file.
+- `Models.swift` — `StreamConfig` (Codable with a RESILIENT custom decoder so adding fields never wipes saved configs; includes the `fpsMatchSource` flag and the `StreamConfig.splitRTMPURL` paste helper), `TextOverlay`, `OverlayPosition`, `ResolutionPreset`/`RTMPPreset`/`InputType`, `StreamStatus` (parses ffmpeg progress for live metrics + freeze/black), `RunningStreamRecord`, `CaptureDevice`, `Profile` (named snapshot of all configs).
+- `StreamManager.swift` — everything dynamic (lifecycle, args, failsafe, preview, overlay, device + framerate probing incl. `probeFileFramerate` / match-source resolution, named-profile persistence). Largest file.
 - `ProcessRegistry.swift` — process table + terminate/killAll.
 - `Preflight.swift` — TCP reachability via `NWConnection`.
-- `SetupView.swift` — Configure tab + footer (Preview Streams / Start Streams).
-- `StreamConfigCard.swift` — per-stream config UI (Destination, Failsafe, Text Overlay, Video, Input) + device dropdowns + file/font pickers.
+- `SetupView.swift` — Configure tab + footer (Preview Streams / Start Streams) + the **Profiles** menu (save/load/delete named config snapshots) in the sub-header.
+- `StreamConfigCard.swift` — per-stream config UI (Destination + "Paste full URL" splitter, Failsafe, Text Overlay, Video + FPS "Match source" toggle, Input) + device dropdowns + file/font pickers.
 - `OverlayEditor.swift` — overlay styling controls; `Color(hex:)`.
 - `LivePreviewBox.swift` — `LivePreviewBox` (refreshes the preview JPEG ~12fps) + `PreviewPanel` (pinned, vertically resizable, has the Refresh Preview button).
 - `ActiveStreamsView.swift` — Live tab.
@@ -66,6 +66,9 @@ open Streamer.app               # run
 - Text overlay: `drawtext` with font (bundled Sofia Pro / Bello Pro, or upload `.otf/.ttf`), size, colour, position, multi-line, background box. Text updates **live** on-air (textfile + `reload=1`); other style changes apply on **Refresh**.
 - Live, pinned, resizable preview (`Preview Streams`) of the composed output, with a **Refresh Preview** button; full-screen via the green button.
 - Wobbling health icon; child ffmpeg killed on app quit (no orphans).
+- **FPS "Match source"** (per-stream `fpsMatchSource` flag): encode at the source's native rate instead of a typed value. Capture probes the device's highest native mode (`probeCaptureFramerate(preferMax:)`); file parses the rate from `ffmpeg -i` (`probeFileFramerate`). The rate is resolved ONCE at pre-flight, cached in `captureFramerate[id]`, and threaded through `buildArgs`/`buildSlateArgs` as a numeric `outputFPS`; the encode path stays CFR. `config.fps` is ALWAYS numeric (the fallback). DeckLink is intentionally excluded (the UI hides the toggle) until it can be tested on hardware.
+- **Paste-a-URL splitter**: a "Paste full URL" button in each Destination section reads the clipboard, splits a combined `rtmp(s)://host/app/streamkey` into URL + key via `StreamConfig.splitRTMPURL`, and flips the preset to Custom. The splitter refuses to mis-split a keyless URL or a non-rtmp string (unit-checked, 9 cases).
+- **Named profiles**: the "Profiles" menu in the Configure header saves/loads/deletes named snapshots of all stream configs (`Profile` in Models, persisted in `UserDefaults` under `profilesKey`). Loading swaps the editable configs only — running streams (which hold their own snapshots) are untouched.
 
 ## Known bugs / gotchas (do not rediscover these)
 
@@ -78,8 +81,10 @@ open Streamer.app               # run
 
 ## Open requests / next steps
 
-- Pending owner go-ahead: trim/remove the verbose preview debug logging.
-- Possible: `-pixel_format` on AVFoundation input to silence the warning and harden; FPS "match source" for capture.
+- Owner is KEEPING the verbose preview debug logging ON (used for testing) — do not trim without asking.
+- **Next up — alert on stream drop/recover via a generic outbound webhook** (owner's choice over desktop notifications). One fire-and-forget JSON POST per event, opt-in, MUST never block or affect the stream; owner routes it to WhatsApp/email/SMS via Zapier/Make/Twilio. Telegram/Slack/Discord presets optional later.
+- **DeckLink "Match source"** — extend the new FPS match-source feature to DeckLink (detect the SDI/HDMI signal's rate). Deferred: needs the physical DeckLink to test; don't ship untested capture code.
+- `-pixel_format` on AVFoundation input — **decided against**: the yuv420p warning is harmless, the filter chain forces yuv420p downstream anyway, and a safe version needs a per-device probe for near-zero benefit.
 - Distribution: Developer ID + notarization if it ships beyond the owner's machines.
 
 ## Deferred / researched (do NOT build unless explicitly asked)

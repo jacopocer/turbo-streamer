@@ -15,6 +15,9 @@ final class StreamManager: ObservableObject {
 
     private static let configsKey = "TurboStreamer.savedConfigs.v1"
 
+    @Published private(set) var savedProfileNames: [String] = []
+    private static let profilesKey = "TurboStreamer.savedProfiles.v1"
+
     // Device lists (shared across all config cards)
     @Published private(set) var avVideoDevices:  [CaptureDevice] = []
     @Published private(set) var avAudioDevices:  [CaptureDevice] = []
@@ -59,6 +62,7 @@ final class StreamManager: ObservableObject {
         if let saved = Self.loadConfigs(), !saved.isEmpty {
             configs = saved
         }
+        savedProfileNames = Self.loadProfiles().map(\.name)
 
         // Fresh debug log each session
         try? "=== session start \(Date()) ===\n".write(to: debugLogURL(), atomically: true, encoding: .utf8)
@@ -132,6 +136,42 @@ final class StreamManager: ObservableObject {
     private static func loadConfigs() -> [StreamConfig]? {
         guard let data = UserDefaults.standard.data(forKey: configsKey) else { return nil }
         return try? JSONDecoder().decode([StreamConfig].self, from: data)
+    }
+
+    // MARK: - Named profiles
+
+    private static func loadProfiles() -> [Profile] {
+        guard let data = UserDefaults.standard.data(forKey: profilesKey) else { return [] }
+        return (try? JSONDecoder().decode([Profile].self, from: data)) ?? []
+    }
+
+    private func persistProfiles(_ profiles: [Profile]) {
+        if let data = try? JSONEncoder().encode(profiles) {
+            UserDefaults.standard.set(data, forKey: Self.profilesKey)
+        }
+        savedProfileNames = profiles.map(\.name)
+    }
+
+    /// Snapshot the current stream setup under `name` (overwrites one with the same name).
+    func saveProfile(named name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var profiles = Self.loadProfiles().filter { $0.name != trimmed }
+        profiles.append(Profile(name: trimmed, configs: configs))
+        profiles.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        persistProfiles(profiles)
+    }
+
+    /// Replace the editable configs with a saved profile. Running streams are unaffected
+    /// (they hold their own config snapshots), so this only changes the Configure tab.
+    func loadProfile(named name: String) {
+        guard let profile = Self.loadProfiles().first(where: { $0.name == name }),
+              !profile.configs.isEmpty else { return }
+        configs = profile.configs   // didSet persists + syncs previews
+    }
+
+    func deleteProfile(named name: String) {
+        persistProfiles(Self.loadProfiles().filter { $0.name != name })
     }
 
     // MARK: - Config management
@@ -281,7 +321,7 @@ final class StreamManager: ObservableObject {
     /// AVFoundation rejects any framerate the device doesn't natively support (the
     /// FaceTime camera, for example, does 15/30 only — not 25 or the 29.97 default).
     /// Probe the device's supported framerates and return the one closest to `target`.
-    func probeCaptureFramerate(deviceIndex: String, target: Int) async -> String {
+    func probeCaptureFramerate(deviceIndex: String, target: Int, preferMax: Bool = false) async -> String {
         // Opening with no framerate fails fast AND prints the supported modes.
         let raw = await runFFmpegCapturingOutput(
             args: ["-hide_banner", "-f", "avfoundation", "-i", deviceIndex])
@@ -294,10 +334,35 @@ final class StreamManager: ObservableObject {
                 if let d = Double(tok) { rates.insert(Int(d.rounded())) }
             }
         }
+        // "Match source": take the device's highest native rate; otherwise the
+        // supported mode closest to the requested target.
+        if preferMax, let maxRate = rates.max() { return String(maxRate) }
         guard let best = rates.min(by: { abs($0 - target) < abs($1 - target) }) else {
             return "30"   // sensible default if the device didn't report modes
         }
         return String(best)
+    }
+
+    /// Reads the video stream's frame rate from a media file using ffmpeg's input
+    /// banner (no full decode). Returns a rounded integer string (e.g. "30", "60"), or nil.
+    func probeFileFramerate(path: String) async -> String? {
+        guard !path.isEmpty else { return nil }
+        let raw = await runFFmpegCapturingOutput(args: ["-hide_banner", "-i", path])
+        for line in raw.components(separatedBy: "\n") where line.contains("Video:") {
+            // e.g. "..., 30 fps, 30 tbr, ..." — prefer the reported fps, else the tbr.
+            if let v = Self.numberBefore(unit: "fps", in: line) { return v }
+            if let v = Self.numberBefore(unit: "tbr", in: line) { return v }
+        }
+        return nil
+    }
+
+    /// Finds "<number> <unit>" in `line` and returns the number rounded to an int string.
+    private static func numberBefore(unit: String, in line: String) -> String? {
+        guard let r = line.range(of: " \(unit)") else { return nil }
+        let head  = line[line.startIndex..<r.lowerBound]
+        let token = String(head.reversed().prefix(while: { $0.isNumber || $0 == "." }).reversed())
+        guard let d = Double(token) else { return nil }
+        return String(Int(d.rounded()))
     }
 
     // MARK: - Device listing
@@ -458,10 +523,18 @@ final class StreamManager: ObservableObject {
                 appendLog(cam
                     ? "✓ Camera access granted."
                     : "⚠ Camera access denied — enable this app under System Settings → Privacy & Security → Camera, then restart the stream.", to: id)
+                let matchSrc = record.config.fpsMatchSource
                 let target = Int(record.config.fps) ?? 30
-                let chosen = await probeCaptureFramerate(deviceIndex: record.config.videoDeviceIndex, target: target)
+                let chosen = await probeCaptureFramerate(deviceIndex: record.config.videoDeviceIndex, target: target, preferMax: matchSrc)
                 captureFramerate[id] = chosen
-                appendLog("✓ Camera input at \(chosen) fps (closest mode the device supports to \(target)).", to: id)
+                appendLog(matchSrc
+                    ? "✓ Camera input matching source at \(chosen) fps (device's native rate)."
+                    : "✓ Camera input at \(chosen) fps (closest mode the device supports to \(target)).", to: id)
+            } else if record.config.inputType == .file, record.config.fpsMatchSource {
+                // Pre-resolve the file's native rate once (cached for the whole session).
+                let r = await probeFileFramerate(path: record.config.filePath)
+                captureFramerate[id] = r ?? record.config.fps
+                appendLog("✓ Matching source frame rate: \(r ?? record.config.fps) fps (from file).", to: id)
             }
 
             // ── Pre-flight: is the destination reachable? (non-blocking, informational) ──
@@ -572,9 +645,11 @@ final class StreamManager: ObservableObject {
             overlayURL = url
         }
 
+        let outputFPS = resolvedOutputFPS(for: config, captureFPS: captureFramerate[id])
         let args = buildArgs(for: config, recordingURL: recordingURL,
                              bitrateOverride: bitrate, snapshotURL: snapURL,
-                             overlayTextURL: overlayURL, captureFPS: captureFramerate[id])
+                             overlayTextURL: overlayURL, captureFPS: captureFramerate[id],
+                             outputFPS: outputFPS)
 
         if let rec = recordingURL {
             appendLog("● Safety recording → \(rec.path)", to: id)
@@ -695,7 +770,8 @@ final class StreamManager: ObservableObject {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ffmpegPath)
-        process.arguments     = buildSlateArgs(for: record.config, bitrate: bitrate, sourcePath: source)
+        let slateFPS = record.config.fpsMatchSource ? (captureFramerate[record.id] ?? record.config.fps) : record.config.fps
+        process.arguments     = buildSlateArgs(for: record.config, bitrate: bitrate, sourcePath: source, outputFPS: slateFPS)
         process.standardInput = FileHandle.nullDevice
 
         let libDir = URL(fileURLWithPath: ffmpegPath)
@@ -741,9 +817,9 @@ final class StreamManager: ObservableObject {
         pipe?.fileHandleForReading.readabilityHandler = nil   // release dispatch source / FD
     }
 
-    private func buildSlateArgs(for config: StreamConfig, bitrate: String, sourcePath: String?) -> [String] {
+    private func buildSlateArgs(for config: StreamConfig, bitrate: String, sourcePath: String?, outputFPS: String? = nil) -> [String] {
         let (w, h) = config.resolution.outputDimensions
-        let fps    = config.fps
+        let fps    = outputFPS ?? config.fps
         let kbps   = Self.kbps(bitrate)
         let dest   = "\(config.rtmpURL)/\(config.streamKey)"
 
@@ -882,7 +958,7 @@ final class StreamManager: ObservableObject {
         var camFps = captureFramerate[id] ?? "30"
         if config.inputType == .capture, captureFramerate[id] == nil {
             await ensureCameraAccess()
-            camFps = await probeCaptureFramerate(deviceIndex: config.videoDeviceIndex, target: Int(config.fps) ?? 30)
+            camFps = await probeCaptureFramerate(deviceIndex: config.videoDeviceIndex, target: Int(config.fps) ?? 30, preferMax: config.fpsMatchSource)
             captureFramerate[id] = camFps
             dlog("startPreview[\(short)] probed camFps=\(camFps)")
         }
@@ -1070,11 +1146,20 @@ final class StreamManager: ObservableObject {
 
     // MARK: - Private: argument builder
 
-    private func buildArgs(for config: StreamConfig, recordingURL: URL?, bitrateOverride: String? = nil, snapshotURL: URL? = nil, overlayTextURL: URL? = nil, captureFPS: String? = nil) -> [String] {
+    /// The numeric framerate to encode at. With "Match source", this is the source's
+    /// native rate, pre-resolved into `captureFPS` during pre-flight (capture: probed
+    /// device rate; file: parsed from the media). Falls back to the user's `fps` value.
+    private func resolvedOutputFPS(for config: StreamConfig, captureFPS: String?) -> String {
+        guard config.fpsMatchSource else { return config.fps }
+        return captureFPS ?? config.fps
+    }
+
+    private func buildArgs(for config: StreamConfig, recordingURL: URL?, bitrateOverride: String? = nil, snapshotURL: URL? = nil, overlayTextURL: URL? = nil, captureFPS: String? = nil, outputFPS: String? = nil) -> [String] {
         let videoBitrate = bitrateOverride ?? config.videoBitrate
         let bitrateNum = Int(videoBitrate.replacingOccurrences(of: "k", with: "")) ?? 4500
         let bufsize    = "\(bitrateNum * 2)k"
-        let fpsInt     = Int(config.fps) ?? 30
+        let outFPS     = outputFPS ?? config.fps
+        let fpsInt     = Int(outFPS) ?? 30
         let dest       = "\(config.rtmpURL)/\(config.streamKey)"
         let backup     = config.backupRTMPURL.trimmingCharacters(in: .whitespaces)
 
@@ -1152,7 +1237,7 @@ final class StreamManager: ObservableObject {
 
         if useTee || snapshot {
             // Build the filtergraph, splitting off a low-fps snapshot branch if needed.
-            var fc = "[0:v]\(videoFilter),fps=\(config.fps)"
+            var fc = "[0:v]\(videoFilter),fps=\(outFPS)"
             if snapshot {
                 fc += ",split=2[vmain][vtmp];[vtmp]fps=1,scale=640:-2[vsnap]"
             } else {
@@ -1179,7 +1264,7 @@ final class StreamManager: ObservableObject {
                          "-f", "image2", snap.path]
             }
         } else {
-            args += ["-vf", videoFilter, "-r", config.fps]
+            args += ["-vf", videoFilter, "-r", outFPS]
             args += encoderArgs()
             args += audioArgs
             args += ["-f", "flv", dest]

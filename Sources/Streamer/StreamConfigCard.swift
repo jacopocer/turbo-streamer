@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct StreamConfigCard: View {
     @Binding var config: StreamConfig
     @EnvironmentObject var manager: StreamManager
+    @State private var pasteHint: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -49,6 +50,32 @@ struct StreamConfigCard: View {
                 labeled("Stream Key") {
                     TextField("Your stream key", text: $config.streamKey)
                         .textFieldStyle(.roundedBorder)
+                }
+
+                HStack(spacing: 8) {
+                    Button {
+                        if let s = NSPasteboard.general.string(forType: .string),
+                           let parts = StreamConfig.splitRTMPURL(s) {
+                            config.rtmpPreset = .custom
+                            config.rtmpURL    = parts.base
+                            config.streamKey  = parts.key
+                            pasteHint = nil
+                        } else {
+                            pasteHint = "Clipboard isn't a full rtmp:// URL with a key."
+                        }
+                    } label: {
+                        Label("Paste full URL", systemImage: "doc.on.clipboard")
+                            .font(.custom("SofiaPro", size: 11))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Paste a combined rtmp://host/app/streamkey and split it into the URL + key fields")
+                    if let hint = pasteHint {
+                        Text(hint)
+                            .font(.custom("SofiaPro", size: 10))
+                            .foregroundStyle(.orange)
+                    }
+                    Spacer()
                 }
             }
 
@@ -166,6 +193,13 @@ struct StreamConfigCard: View {
                         TextField("25", text: $config.fps)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 60)
+                            .disabled(config.fpsMatchSource)
+                            .opacity(config.fpsMatchSource ? 0.45 : 1)
+                    }
+                    if config.inputType != .decklink {
+                        Toggle("Match source", isOn: $config.fpsMatchSource)
+                            .toggleStyle(.checkbox)
+                            .help("Encode at the source's native frame rate (falls back to the value on the left if it can't be detected)")
                     }
                     labeled("Audio Bitrate") {
                         TextField("128k", text: $config.audioBitrate)
@@ -186,6 +220,10 @@ struct StreamConfigCard: View {
                     ForEach(InputType.allCases) { t in Text(t.rawValue).tag(t) }
                 }
                 .pickerStyle(.segmented)
+                .onChange(of: config.inputType) { newType in
+                    // "Match source" isn't wired for DeckLink yet — clear it on switch.
+                    if newType == .decklink { config.fpsMatchSource = false }
+                }
 
                 if config.inputType == .file {
                     fileInputSection
