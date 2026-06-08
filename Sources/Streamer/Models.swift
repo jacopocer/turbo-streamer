@@ -199,6 +199,96 @@ extension StreamConfig {
     }
 }
 
+// MARK: - Plain-language diagnostics
+
+enum DiagnosticSeverity: Equatable { case error, warning, info }
+
+/// A human-readable translation of a known failure signature in the ffmpeg / app log.
+/// The catalog is plain data — add entries freely; matchers are lowercase substrings.
+struct Diagnostic: Identifiable, Equatable {
+    let id: String
+    let severity: DiagnosticSeverity
+    let title: String     // plain, glanceable headline
+    let meaning: String   // one line: what it means
+    let fix: String       // one line: what to try
+    let match: [String]   // case-insensitive substrings; ANY hit triggers
+
+    static func == (a: Diagnostic, b: Diagnostic) -> Bool { a.id == b.id }
+
+    /// First catalog entry whose any matcher appears in `line` (case-insensitive).
+    static func diagnose(_ line: String) -> Diagnostic? {
+        let l = line.lowercased()
+        return catalog.first { d in d.match.contains { l.contains($0) } }
+    }
+
+    /// Focused, high-frequency catalog. Order = priority (specific before generic).
+    static let catalog: [Diagnostic] = [
+        // ── Connection / destination ──
+        Diagnostic(id: "dns", severity: .error,
+                   title: "Pippo ha perso la mappa",
+                   meaning: "The server address can't be found: the hostname in your RTMP URL doesn't exist online — usually a typo, or no internet.",
+                   fix: "Double-check the RTMP URL and that this Mac is online.",
+                   match: ["failed to resolve hostname"]),
+        Diagnostic(id: "refused", severity: .error,
+                   title: "La security non ti fa entrare",
+                   meaning: "The server refused the connection: reachable but won't accept the stream — wrong URL/port, or the platform's ingest is down.",
+                   fix: "Verify the RTMP URL; if it's right, the platform may be down.",
+                   match: ["connection refused"]),
+        Diagnostic(id: "timeout", severity: .error,
+                   title: "Nessuno risponde, Pluto aspetta alla porta",
+                   meaning: "The server never replied in time — often a firewall blocking RTMP port 1935, or a very slow network.",
+                   fix: "Try another network or check the firewall.",
+                   match: ["connection timed out", "operation timed out"]),
+        Diagnostic(id: "dropped", severity: .warning,
+                   title: "Oh no, Pippo è inciampato nel cavo!",
+                   meaning: "You were live, then the platform dropped the connection — a network blip or not enough upload speed.",
+                   fix: "Reconnecting now; if it repeats, check upload bandwidth and the chiave (stream key).",
+                   match: ["connection reset by peer", "broken pipe", "error writing trailer"]),
+        Diagnostic(id: "rejected", severity: .error,
+                   title: "Paperoga respinto: chiave sbagliata",
+                   meaning: "The platform actively rejected the broadcast — almost always a wrong or expired stream key.",
+                   fix: "Re-copy the chiave from the platform and start again.",
+                   match: ["rtmp server sent error", "unauthorized", "forbidden"]),
+        // ── Input / source ──
+        Diagnostic(id: "nofile", severity: .error,
+                   title: "Il nastro è sparito a Topolinia",
+                   meaning: "The video file isn't where it was — moved, renamed, or deleted.",
+                   fix: "Pick the file again.",
+                   match: ["error opening input: no such file"]),
+        Diagnostic(id: "stalled", severity: .warning,
+                   title: "Pippo si è addormentato",
+                   meaning: "No new video for 10s: the camera/capture card was unplugged, lost power, or froze.",
+                   fix: "Check the cavo (cable)/device — auto-restarting.",
+                   match: ["no frames for", "input stalled"]),
+        Diagnostic(id: "camera_denied", severity: .error,
+                   title: "Il Mac non dà la telecamera a Topolino",
+                   meaning: "macOS privacy is blocking the app from the camera.",
+                   fix: "System Settings → Privacy & Security → Camera, enable Streamer, then restart.",
+                   match: ["camera access denied", "not authorized to use"]),
+        Diagnostic(id: "device_busy", severity: .error,
+                   title: "I Bassotti hanno ciulato la telecamera",
+                   meaning: "Another app already has the camera open (Zoom, OBS, a browser).",
+                   fix: "Quit the other app, then restart.",
+                   match: ["device or resource busy"]),
+        // ── Device / disk / engine ──
+        Diagnostic(id: "decklink", severity: .error,
+                   title: "Blackmagic fa impazzire Pippo",
+                   meaning: "The DeckLink device couldn't open — not connected, off, or the Desktop Video driver is too old.",
+                   fix: "Check it's connected, install Desktop Video 16+, then re-scan.",
+                   match: ["cannot open decklink", "no decklink devices", "could not open decklink"]),
+        Diagnostic(id: "disk_full", severity: .error,
+                   title: "Il deposito di Paperone è pieno",
+                   meaning: "The disk has no free space for the safety recording.",
+                   fix: "Free up space, or turn off Safety recording.",
+                   match: ["no space left on device"]),
+        Diagnostic(id: "launch_fail", severity: .error,
+                   title: "Archimede non riesce ad avviare il motore",
+                   meaning: "The streaming engine (ffmpeg) failed to launch — a rare glitch.",
+                   fix: "Restart the app; if it persists, rebuild with build.sh.",
+                   match: ["failed to launch ffmpeg"]),
+    ]
+}
+
 // MARK: - Runtime status
 
 struct StreamStatus {
@@ -210,7 +300,12 @@ struct StreamStatus {
     var liveBitrate: String?
     var liveSpeed: String?
     var liveDrop: String?
-    var inputWarning: String?     // "Frozen" / "Black" / nil — content issue, not a disconnect
+    var inputWarning: String?     // themed freeze/black badge text, or nil — content issue, not a disconnect
+    var currentDiagnostic: Diagnostic?   // plain-language translation of the latest failure (nil = all good)
+
+    // Themed badge text for the freeze / black content detectors (Topolino voice).
+    static let frozenBadge = "Pippo si è freezato, prova a dargli una botta!"
+    static let blackBadge  = "Non si vede niente, stai forse rubando lo stipendio?"
 
     /// True if a progress line was seen in this batch (used by the hang watchdog).
     @discardableResult
@@ -223,6 +318,7 @@ struct StreamStatus {
         if logLines.count > 500 { logLines.removeFirst(logLines.count - 500) }
 
         var sawProgress = false
+        var firstIssue: Diagnostic? = nil
         for line in incoming {
             if line.contains("frame=") && line.contains("fps=") {
                 sawProgress = true
@@ -230,13 +326,19 @@ struct StreamStatus {
                 if let v = Self.value(after: "bitrate=", in: line) { liveBitrate = v }
                 if let v = Self.value(after: "speed=",   in: line) { liveSpeed   = v }
                 if let v = Self.value(after: "drop=",    in: line) { liveDrop    = v }
+            } else if firstIssue == nil {
+                firstIssue = Diagnostic.diagnose(line)   // ffmpeg logs the root cause first
             }
             // Content-quality detectors (passthrough filters that only log)
-            if line.contains("freeze_start") { inputWarning = "Frozen" }
-            if line.contains("freeze_end")   { if inputWarning == "Frozen" { inputWarning = nil } }
-            if line.contains("black_start")  { inputWarning = "Black screen" }
-            if line.contains("black_end")    { if inputWarning == "Black screen" { inputWarning = nil } }
+            if line.contains("freeze_start") { inputWarning = Self.frozenBadge }
+            if line.contains("freeze_end")   { if inputWarning == Self.frozenBadge { inputWarning = nil } }
+            if line.contains("black_start")  { inputWarning = Self.blackBadge }
+            if line.contains("black_end")    { if inputWarning == Self.blackBadge { inputWarning = nil } }
         }
+        // Frames flowing ⇒ any earlier connection/input error is resolved; otherwise
+        // surface the first matched failure for the Live card's plain-language panel.
+        if sawProgress { currentDiagnostic = nil }
+        else if let issue = firstIssue { currentDiagnostic = issue }
         return sawProgress
     }
 
