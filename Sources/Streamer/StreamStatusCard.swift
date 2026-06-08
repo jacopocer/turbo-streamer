@@ -92,6 +92,11 @@ struct StreamStatusCard: View {
             }
             .padding(14)
 
+            // ── Plain-language "What's happening" panel (raw log stays below) ──
+            if status.phase.isActive, let issue = status.currentDiagnostic {
+                diagnosticPanel(issue)
+            }
+
             // ── Live overlay editor ───────────────────────────────────────────
             if showOverlayEditor, record.config.overlay.enabled {
                 Divider().background(Color.white.opacity(0.07))
@@ -139,6 +144,53 @@ struct StreamStatusCard: View {
             Image(systemName: phaseIcon)
                 .foregroundStyle(phaseColor)
                 .font(.system(size: 14, weight: .semibold))
+        }
+    }
+
+    /// Plain-language "What's happening" callout — explains the latest failure in
+    /// simple words with a fix tip. The raw technical log is unchanged below.
+    @ViewBuilder
+    private func diagnosticPanel(_ d: Diagnostic) -> some View {
+        let tint = diagnosticColor(d.severity)
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: d.severity == .error ? "exclamationmark.octagon.fill"
+                                                   : "exclamationmark.triangle.fill")
+                .foregroundStyle(tint)
+                .font(.system(size: 15))
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(d.title)
+                    .font(.custom("SofiaPro-SemiBold", size: 13))
+                    .foregroundStyle(.white)
+                Text(d.meaning)
+                    .font(.custom("SofiaPro", size: 11))
+                    .foregroundStyle(Color.white.opacity(0.6))
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .top, spacing: 5) {
+                    Image(systemName: "wrench.and.screwdriver.fill")
+                        .font(.system(size: 9)).padding(.top, 2)
+                    Text(d.fix)
+                        .font(.custom("SofiaPro", size: 11))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .foregroundStyle(tint)
+                .padding(.top, 1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(tint.opacity(0.10))
+        .overlay(Rectangle().frame(width: 3).foregroundStyle(tint), alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.bottom, 10)
+    }
+
+    private func diagnosticColor(_ s: DiagnosticSeverity) -> Color {
+        switch s {
+        case .error:   return .red
+        case .warning: return .orange
+        case .info:    return .blue
         }
     }
 

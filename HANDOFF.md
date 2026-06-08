@@ -22,7 +22,7 @@ Repo: `github.com/jacopocer/turbo-streamer` (currently PUBLIC; owner is handling
 
 - `StreamerApp.swift` — `@main`; loads bundled fonts; window is resizable + full-screen capable.
 - `ContentView.swift` — root: header (wobbling app icon + Indigital logo top-right), custom two-tab bar, fills the window/full-screen.
-- `Models.swift` — `StreamConfig` (Codable with a RESILIENT custom decoder so adding fields never wipes saved configs; includes the `fpsMatchSource` flag and the `StreamConfig.splitRTMPURL` paste helper), `TextOverlay`, `OverlayPosition`, `ResolutionPreset`/`RTMPPreset`/`InputType`, `StreamStatus` (parses ffmpeg progress for live metrics + freeze/black), `RunningStreamRecord`, `CaptureDevice`, `Profile` (named snapshot of all configs).
+- `Models.swift` — `StreamConfig` (Codable with a RESILIENT custom decoder so adding fields never wipes saved configs; includes the `fpsMatchSource` flag and the `StreamConfig.splitRTMPURL` paste helper), `TextOverlay`, `OverlayPosition`, `ResolutionPreset`/`RTMPPreset`/`InputType`, `StreamStatus` (parses ffmpeg progress for live metrics + freeze/black), `RunningStreamRecord`, `CaptureDevice`, `Profile` (named snapshot of all configs), `Diagnostic` (plain-language error catalog + matcher; `StreamStatus.currentDiagnostic` holds the active one).
 - `StreamManager.swift` — everything dynamic (lifecycle, args, failsafe, preview, overlay, device + framerate probing incl. `probeFileFramerate` / match-source resolution, named-profile persistence). Largest file.
 - `ProcessRegistry.swift` — process table + terminate/killAll.
 - `Preflight.swift` — TCP reachability via `NWConnection`.
@@ -31,7 +31,7 @@ Repo: `github.com/jacopocer/turbo-streamer` (currently PUBLIC; owner is handling
 - `OverlayEditor.swift` — overlay styling controls; `Color(hex:)`.
 - `LivePreviewBox.swift` — `LivePreviewBox` (refreshes the preview JPEG ~12fps) + `PreviewPanel` (pinned, vertically resizable, has the Refresh Preview button).
 - `ActiveStreamsView.swift` — Live tab.
-- `StreamStatusCard.swift` — per-stream live status card.
+- `StreamStatusCard.swift` — per-stream live status card + the plain-language **diagnostic panel** (`diagnosticPanel`, driven by `StreamStatus.currentDiagnostic`).
 - `FontLoader.swift` — registers bundled OTFs via CoreText at launch.
 
 ## How to build & run (exact)
@@ -69,6 +69,7 @@ open Streamer.app               # run
 - **FPS "Match source"** (per-stream `fpsMatchSource` flag): encode at the source's native rate instead of a typed value. Capture probes the device's highest native mode (`probeCaptureFramerate(preferMax:)`); file parses the rate from `ffmpeg -i` (`probeFileFramerate`). The rate is resolved ONCE at pre-flight, cached in `captureFramerate[id]`, and threaded through `buildArgs`/`buildSlateArgs` as a numeric `outputFPS`; the encode path stays CFR. `config.fps` is ALWAYS numeric (the fallback). DeckLink is intentionally excluded (the UI hides the toggle) until it can be tested on hardware.
 - **Paste-a-URL splitter**: a "Paste full URL" button in each Destination section reads the clipboard, splits a combined `rtmp(s)://host/app/streamkey` into URL + key via `StreamConfig.splitRTMPURL`, and flips the preset to Custom. The splitter refuses to mis-split a keyless URL or a non-rtmp string (unit-checked, 9 cases).
 - **Named profiles**: the "Profiles" menu in the Configure header saves/loads/deletes named snapshots of all stream configs (`Profile` in Models, persisted in `UserDefaults` under `profilesKey`). Loading swaps the editable configs only — running streams (which hold their own snapshots) are untouched.
+- **Plain-language diagnostics**: a `Diagnostic` catalog (`Models.swift`) translates known ffmpeg/app failure signatures into a friendly "What's happening" callout atop each Live card (`StreamStatusCard.diagnosticPanel`) — title + what-it-means + a fix tip — while the raw technical log stays untouched below. Matching runs in `StreamStatus.appendLog` (first match per batch; cleared when a progress line shows frames resuming). Copy is themed in a **Topolino & Pippo** voice (owner's pick); the catalog and the freeze/black badge text (`StreamStatus.frozenBadge`/`blackBadge`) are plain data — re-theme by editing strings, the `match:` arrays (the real triggers) stay. Deliberately a focused ~12-entry set (connection / input / device / disk / engine) to avoid false alarms on benign log noise.
 
 ## Known bugs / gotchas (do not rediscover these)
 
