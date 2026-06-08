@@ -15,10 +15,11 @@ A native macOS SwiftUI shell that orchestrates **bundled ffmpeg** subprocesses. 
 | Multi-stream | ✅ | 1–8 simultaneous RTMP streams |
 | UI | ✅ | Two tabs — **Configure** (build streams while others run) + **Live** (monitor) |
 | Inputs | ✅ | File loop · Capture card (AVFoundation) · **Blackmagic DeckLink** |
-| Destinations | ✅ | Mux / YouTube / Vimeo presets + Custom; RTMP **and RTMPS** |
+| Destinations | ✅ | Mux / YouTube / Vimeo presets + Custom; RTMP **and RTMPS**; paste a full URL to auto-split into URL + key |
 | Encoder | ✅ | **Auto** — libx264 (≤1080p) / VideoToolbox (4K). No toggle to get wrong |
 | Bitrate | ✅ | Auto-fills per resolution (1080p 5872k, 4K 16000k) |
-| Settings | ✅ | Persist across launches; resilient decode (updates won't wipe them) |
+| Frame rate | ✅ | Per-stream; **Match source** encodes at the camera/file's native rate |
+| Settings | ✅ | Persist across launches; resilient decode (updates won't wipe them); **save/load named profiles** |
 | Live metrics | ✅ | Uptime · fps · bitrate · speed per stream |
 | Live preview | ✅ | **Preview Streams** (next to Start) shows each stream's composed output running live in a **pinned, resizable** panel (stays put while you scroll the settings); overlay/style changes update it in real time |
 | Text overlay | ✅ | Lower-third/standby text — font (bundled or **upload your own**), size, colour, position, multi-line, background box; **live-editable on-air**, shown in the live preview |
