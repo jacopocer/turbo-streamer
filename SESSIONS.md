@@ -17,6 +17,7 @@ Multiple AI chat sessions edit this repo at the same time. **Read this file befo
 _(none)_
 
 ### ✅ DONE (not yet folded into HANDOFF.md)
+- `comet-1` — Plain-language diagnostics: `Diagnostic` catalog + "What's happening" panel atop each Live card; **Topolino & Pippo** voice; freeze/black badges re-themed. `Models.swift`, `StreamStatusCard.swift`, docs. Folded into HANDOFF.md. Commit `7953214`. (Matcher unit-tested 15/15; panel rendering pending owner's visual check.)
 - `comet-1` — FPS "Match source" (capture/file; DeckLink deferred), paste-a-URL splitter, save/load named profiles; skipped `-pixel_format` (low value). `Models.swift`, `StreamManager.swift`, `StreamConfigCard.swift`, `SetupView.swift`, `.gitignore`, docs. Folded into HANDOFF.md. Commit `88f82f8`. (GUI click-through still pending owner verification; next up = generic-webhook drop/recover alerts.)
 - `setup` — added `SESSIONS.md` + `HANDOFF.md` and the parallel-session workflow. (commit pending)
 - prior single-session history (pre-workflow), newest first:
