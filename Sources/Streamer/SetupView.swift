@@ -5,6 +5,7 @@ struct SetupView: View {
     @State private var streamCount: Int = 1
     @State private var showSaveProfile = false
     @State private var newProfileName  = ""
+    @State private var showAlerts      = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -15,6 +16,8 @@ struct SetupView: View {
                     .font(.custom("SofiaPro", size: 13))
                     .foregroundStyle(Color.white.opacity(0.45))
                 Spacer()
+
+                alertsButton
 
                 profilesMenu
 
@@ -126,6 +129,49 @@ struct SetupView: View {
     }
 
     // MARK: - Helpers
+
+    @ViewBuilder
+    private var alertsButton: some View {
+        Button {
+            showAlerts.toggle()
+        } label: {
+            Label("Alerts", systemImage: manager.alertWebhookURL.isEmpty ? "bell.slash" : "bell.badge.fill")
+                .font(.custom("SofiaPro", size: 12))
+                .foregroundStyle(manager.alertWebhookURL.isEmpty ? Color.white.opacity(0.7) : Color.accentColor)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .popover(isPresented: $showAlerts, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Drop / recover alerts")
+                    .font(.custom("SofiaPro-SemiBold", size: 13))
+                Text("When a stream drops or comes back, the app sends a small JSON POST — {app, event, stream, message, time} — to this URL. Point it at a Zapier / Make / Slack / Telegram webhook to reach WhatsApp, email, or SMS.")
+                    .font(.custom("SofiaPro", size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                TextField("https://hooks.zapier.com/…", text: $manager.alertWebhookURL)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Button("Send test") { manager.sendTestAlert() }
+                        .buttonStyle(.bordered).controlSize(.small)
+                        .disabled(manager.alertWebhookURL.isEmpty)
+                    Spacer()
+                    Text(manager.alertWebhookURL.isEmpty ? "Off" : "On")
+                        .font(.custom("SofiaPro", size: 11))
+                        .foregroundStyle(manager.alertWebhookURL.isEmpty ? Color.secondary : .green)
+                }
+                if let result = manager.alertTestResult {
+                    Text(result)
+                        .font(.custom("SofiaPro", size: 11))
+                        .foregroundStyle(result.hasPrefix("✓") ? Color.green
+                                         : result.hasPrefix("⏳") ? Color.secondary : Color.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(16)
+            .frame(width: 380)
+        }
+    }
 
     @ViewBuilder
     private var profilesMenu: some View {

@@ -41,6 +41,7 @@ A native macOS SwiftUI shell that orchestrates **bundled ffmpeg** subprocesses. 
 | Backup RTMP | opt-in | Second ingest via `tee` (failure can't kill primary) |
 | Safety recording | opt-in | Records `.ts` to disk while streaming (crash-survivable) |
 | Adaptive bitrate | opt-in | Drops bitrate on instability, steps back up |
+| Drop/recover alerts | opt-in | Fire-and-forget webhook POST on drop & recover (→ Zapier/Make → WhatsApp/email) |
 
 ### Known limitations
 
