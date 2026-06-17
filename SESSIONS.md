@@ -14,9 +14,10 @@ Multiple AI chat sessions edit this repo at the same time. **Read this file befo
 ## LOG (newest first)
 
 ### 🔄 IN PROGRESS
-_(none)_
+- `comet-1` — `StreamManager.swift`, `SetupView.swift`. Generic webhook alerts (global URL + fire-and-forget POST on real drop/recover; Alerts popover with Send-test feedback). **Code-complete + /code-review-clean (11 findings fixed), built & verified — but UNCOMMITTED in the working tree**, pending the owner's commit call. Do NOT stage these two files without checking with comet-1.
 
 ### ✅ DONE (not yet folded into HANDOFF.md)
+- `comet-1` — App icon replaced with new face image: `Resources/AppIcon.icns` regenerated (squared to 1024² transparent + iconutil); the in-app wobbling icon derives from `applicationIconImage`, so it updates automatically. Rebuilt + installed to /Applications. Commit `e50bbee`, pushed.
 - `comet-1` — Plain-language diagnostics: `Diagnostic` catalog + "What's happening" panel atop each Live card; **Topolino & Pippo** voice; freeze/black badges re-themed. `Models.swift`, `StreamStatusCard.swift`, docs. Folded into HANDOFF.md. Commit `7953214`. (Matcher unit-tested 15/15; panel rendering pending owner's visual check.)
 - `comet-1` — FPS "Match source" (capture/file; DeckLink deferred), paste-a-URL splitter, save/load named profiles; skipped `-pixel_format` (low value). `Models.swift`, `StreamManager.swift`, `StreamConfigCard.swift`, `SetupView.swift`, `.gitignore`, docs. Folded into HANDOFF.md. Commit `88f82f8`. (GUI click-through still pending owner verification; next up = generic-webhook drop/recover alerts.)
 - `setup` — added `SESSIONS.md` + `HANDOFF.md` and the parallel-session workflow. (commit pending)
