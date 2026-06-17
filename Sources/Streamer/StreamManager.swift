@@ -18,6 +18,16 @@ final class StreamManager: ObservableObject {
     @Published private(set) var savedProfileNames: [String] = []
     private static let profilesKey = "TurboStreamer.savedProfiles.v1"
 
+    /// Global webhook URL for drop/recover alerts (empty = off). Persisted.
+    @Published var alertWebhookURL: String = "" {
+        didSet {
+            UserDefaults.standard.set(alertWebhookURL, forKey: Self.alertWebhookKey)
+            alertTestResult = nil   // any prior Send-test result is stale once the URL changes
+        }
+    }
+    @Published var alertTestResult: String?   // transient Send-test outcome shown in the Alerts popover
+    private static let alertWebhookKey = "TurboStreamer.alertWebhookURL.v1"
+
     // Device lists (shared across all config cards)
     @Published private(set) var avVideoDevices:  [CaptureDevice] = []
     @Published private(set) var avAudioDevices:  [CaptureDevice] = []
@@ -34,6 +44,7 @@ final class StreamManager: ObservableObject {
     private var slatePipes:     [UUID: Pipe]              = [:]
     private var overlayText:    [UUID: String]            = [:]   // live overlay text per stream
     private var captureFramerate: [UUID: String]          = [:]   // device-supported fps, probed once
+    private var droppedStreams: Set<UUID> = []   // healthy streams that dropped (pairs drop↔recover alerts)
     @Published private(set) var previewing: Set<UUID>     = []     // configs with a live preview running
     private var previewProcesses: [UUID: Process]         = [:]
     private var previewPipes:     [UUID: Pipe]            = [:]
@@ -63,6 +74,7 @@ final class StreamManager: ObservableObject {
             configs = saved
         }
         savedProfileNames = Self.loadProfiles().map(\.name)
+        alertWebhookURL   = UserDefaults.standard.string(forKey: Self.alertWebhookKey) ?? ""
 
         // Fresh debug log each session
         try? "=== session start \(Date()) ===\n".write(to: debugLogURL(), atomically: true, encoding: .utf8)
@@ -477,6 +489,8 @@ final class StreamManager: ObservableObject {
             if case .reconnecting = statuses[id]?.phase {
                 statuses[id]?.phase = .running
                 playAlert("Glass")
+                let name = runningStreams.first(where: { $0.id == id })?.config.name ?? "Stream"
+                streamRecovered(id: id, name: name)
             }
         }
 
@@ -582,12 +596,15 @@ final class StreamManager: ObservableObject {
                 }
 
                 // ── Reconnect with exponential backoff ──────────────────────
-                if ranFor > 30 { consecutiveFailures = 0 } else { consecutiveFailures += 1 }
+                if ranFor > Self.healthyRunSeconds { consecutiveFailures = 0 } else { consecutiveFailures += 1 }
                 let delay = Self.backoffDelay(consecutiveFailures)
 
                 statuses[id]?.phase = .reconnecting(attempt: attempt + 1)
                 appendLog("⚠ Disconnected (exit \(exitCode)) — reconnecting in \(delay) s…", to: id)
                 playAlert("Basso")
+                if ranFor > Self.healthyRunSeconds {   // a healthy stream dropped (not initial-connect retries)
+                    streamDropped(id: id, name: record.config.name)
+                }
 
                 // ── Fallback slate: keep the channel on-air during the gap ──
                 let useSlate = record.config.fallbackEnabled
@@ -609,6 +626,7 @@ final class StreamManager: ObservableObject {
             await stopSlate(id: id)
             if statuses[id]?.phase.isActive == true { statuses[id]?.phase = .stopped }
             lastProgressAt[id] = nil
+            droppedStreams.remove(id)
             closeLogFile(id: id)
             refreshPowerAssertion()   // release the wake-lock if this was the last live stream
         }
@@ -625,6 +643,91 @@ final class StreamManager: ObservableObject {
     static func backoffDelay(_ consecutiveFailures: Int) -> Int {
         let ladder = [1, 2, 4, 8, 15]
         return ladder[min(max(consecutiveFailures - 1, 0), ladder.count - 1)]
+    }
+
+    // MARK: - Webhook alerts
+
+    /// A run longer than this counts as a "healthy" stream — used both to reset the
+    /// reconnect backoff and to decide a real drop (vs. initial-connect flapping).
+    static let healthyRunSeconds: TimeInterval = 30
+
+    private struct AlertPayload: Encodable {
+        let app = "Turbo Streamer"
+        let event: String
+        let stream: String
+        let message: String
+        let time: String
+    }
+    private static let iso8601 = ISO8601DateFormatter()
+
+    /// The configured webhook as a validated http(s) URL with a host, or nil.
+    private func webhookURL() -> URL? {
+        let raw = alertWebhookURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: raw),
+              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              url.host?.isEmpty == false
+        else { return nil }
+        return url
+    }
+
+    private static func alertRequest(_ url: URL, event: String, stream: String, message: String) -> URLRequest? {
+        let payload = AlertPayload(event: event, stream: stream, message: message,
+                                   time: iso8601.string(from: Date()))
+        guard let body = try? JSONEncoder().encode(payload) else { return nil }
+        var req = URLRequest(url: url, timeoutInterval: 10)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = body
+        return req
+    }
+
+    /// A healthy stream went down — alert once per outage episode (idempotent on the id).
+    private func streamDropped(id: UUID, name: String) {
+        guard droppedStreams.insert(id).inserted else { return }
+        sendWebhookAlert(event: "drop", streamName: name, message: "Stream went offline — reconnecting.")
+    }
+
+    /// Frames resumed — alert only if we sent a matching drop, then clear the pairing.
+    private func streamRecovered(id: UUID, name: String) {
+        guard droppedStreams.remove(id) != nil else { return }
+        sendWebhookAlert(event: "recover", streamName: name, message: "Stream is back online.")
+    }
+
+    /// Fire-and-forget POST for drop/recover. Never blocks or affects the stream: a
+    /// detached task does the request and swallows every error. No-op if the URL is empty
+    /// or not http(s). (URLSession.shared caps connections per host, so an alert burst
+    /// can't fan out unbounded.)
+    func sendWebhookAlert(event: String, streamName: String, message: String) {
+        guard let url = webhookURL(),
+              let req = Self.alertRequest(url, event: event, stream: streamName, message: message)
+        else { return }
+        Task.detached { _ = try? await URLSession.shared.data(for: req) }
+    }
+
+    /// Sends a one-off test payload and reports the outcome in `alertTestResult`, so the
+    /// user can actually confirm their webhook wiring (instead of a silent no-op).
+    func sendTestAlert() {
+        guard let url = webhookURL() else {
+            alertTestResult = "✗ Not a valid http(s):// URL"
+            return
+        }
+        guard let req = Self.alertRequest(url, event: "test", stream: "Test",
+                                          message: "Test alert from Turbo Streamer — your webhook works!") else {
+            alertTestResult = "✗ Couldn't build the message"
+            return
+        }
+        alertTestResult = "⏳ Sending…"
+        Task {
+            do {
+                let (_, resp) = try await URLSession.shared.data(for: req)
+                let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                alertTestResult = (200..<300).contains(code)
+                    ? "✓ Delivered — your webhook replied \(code)"
+                    : "⚠ Reached the server, but it replied \(code)"
+            } catch {
+                alertTestResult = "✗ Failed: \(error.localizedDescription)"
+            }
+        }
     }
 
     // MARK: - Private: process execution
