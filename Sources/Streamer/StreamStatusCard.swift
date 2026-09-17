@@ -80,6 +80,18 @@ struct StreamStatusCard: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
 
+                // Mute / unmute the outgoing audio (restarts this stream's ffmpeg)
+                Button { manager.toggleMute(id: record.id) } label: {
+                    Label(isMuted ? "Unmute" : "Mute",
+                          systemImage: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .font(.custom("SofiaPro", size: 11))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(isMuted ? Color.orange : nil)
+                .disabled(!status.phase.isActive)
+                .help(isMuted ? "Restore the outgoing audio" : "Silence the outgoing audio")
+
                 // Stop button
                 Button { onStop() } label: {
                     Label("Stop", systemImage: "stop.fill")
@@ -324,6 +336,8 @@ struct StreamStatusCard: View {
     }
 
     // MARK: - Helpers
+
+    private var isMuted: Bool { manager.mutedStreams.contains(record.id) }
 
     private var phaseColor: Color {
         switch status.phase {
