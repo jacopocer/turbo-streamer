@@ -41,4 +41,11 @@ sleep 2
 echo "== health =="
 ssh_do "systemctl is-active turbolink-api turborelay && curl -fsS http://127.0.0.1:8814/health && echo && ss -lun | grep -q ':8890 ' && echo 'SRT listener up' && ss -ltn | grep -q ':1935 ' && echo 'RTMP listener up'"
 curl -fsS "https://turbostreamer.indigital.tv/health" && echo
+# Closing the circle for the neighbours (asked by the garibaldi session): the
+# turbolink restart and the ufw change must leave garibaldi-api untouched.
+echo "== neighbours =="
+ssh_do "curl -fsS -m 5 http://127.0.0.1:8789/api/health && echo ' garibaldi-api OK'"
+for u in https://indigital.tv https://garibaldi.indigital.tv; do
+    printf '%s → %s\n' "$u" "$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$u")"
+done
 echo "== done =="
