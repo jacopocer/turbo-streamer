@@ -72,7 +72,24 @@ open Streamer.app               # run
 - **Plain-language diagnostics**: a `Diagnostic` catalog (`Models.swift`) translates known ffmpeg/app failure signatures into a friendly "What's happening" callout atop each Live card (`StreamStatusCard.diagnosticPanel`) — title + what-it-means + a fix tip — while the raw technical log stays untouched below. Matching runs in `StreamStatus.appendLog` (first match per batch; cleared when a progress line shows frames resuming). Copy is themed in a **Topolino & Pippo** voice (owner's pick); the catalog and the freeze/black badge text (`StreamStatus.frozenBadge`/`blackBadge`) are plain data — re-theme by editing strings, the `match:` arrays (the real triggers) stay. Deliberately a focused ~12-entry set (connection / input / device / disk / engine) to avoid false alarms on benign log noise.
 - **Drop/recover webhook alerts** (opt-in, off by default): a global "Alerts" webhook URL (Configure-header popover, persisted in `UserDefaults`). On a real drop (a healthy stream — ran > `healthyRunSeconds` — going down) and the paired recover, the app fires a fire-and-forget JSON POST `{app, event, stream, message, time}` (`sendWebhookAlert` → `Task.detached`, errors swallowed — never blocks or affects the stream). Pairing is centralized in `streamDropped`/`streamRecovered` over a `droppedStreams` set; "Send test" reports the HTTP outcome. Point the URL at Zapier/Make/Slack/Telegram to reach WhatsApp/email/SMS.
 
+- **Live mute/unmute** per stream: the audio chain always carries a `volume` filter, and the toggle sends ffmpeg a runtime filter command on **stdin** (`cvolume -1 volume 0`). Nothing restarts, the video is untouched. `runFFmpeg` keeps stdin as a `Pipe` per stream; SIGPIPE is ignored so writing to a dead ffmpeg can't kill the app. `mutedStreams` seeds the filter's initial value, so a reconnect comes back muted.
+- **Network input** (`InputType.network` + `networkURL`): consume a live RTSP/RTMP/SRT/HTTP source — typically a feed served by Turbo Receiver — and restream it. No `-re`/`-stream_loop` (a live source paces itself); RTSP is forced over TCP.
+
+## Turbo Receiver (second app, `receiver/`)
+
+Separate SwiftPM package, same orchestrator model: a thin SwiftUI shell around a bundled **MediaMTX** (single static Go binary, MIT). The app moves no pixels.
+
+- One sender publishes to `rtmp://<host>:1935/<key>`; MediaMTX republishes the same stream simultaneously on **RTSP :8554**, **RTMP :1935** and **HLS :8888**, so N readers consume it at once (OBS and other Turbo Streamer instances over RTSP; TVs/browsers over HLS).
+- Only declared keys go into the generated config, so the 24-char key is the publish secret and unknown paths are refused.
+- Paths are added/removed at runtime through the MediaMTX API (`:9997`), so adding a feed needs no restart. Status polling reads `ready`/tracks/readers and derives bitrate from the byte delta.
+- Address picker lists every non-loopback IPv4 and prefers a Tailscale `100.x`.
+- **NDI output** (for the BirdDog decoders): per enabled feed the app runs ffmpeg (decodes into two FIFOs: raw UYVY422 + s16le) and `ndi-sender` (`receiver/ndi/`, C, links the NDI runtime). Clocking is off because the source is already live. A supervisor restarts the bridge if either process dies while NDI is still on. `ndi-find` lists NDI sources from a terminal, which is how the sender is verified without a GUI.
+- `fetch-mediamtx.sh` pulls the binary into `vendor/` (gitignored); `build-ndi.sh` compiles the NDI tools against the SDK headers (`NDI_SDK_DIR`, or the DistroAV checkout).
 ## Known bugs / gotchas (do not rediscover these)
+
+- The Homebrew ffmpeg on this machine is **broken** (missing `libass`) and `brew install` fails outright because the `homebrew-ffmpeg` tap is untrusted. Both `build.sh` scripts therefore pick an ffmpeg by **testing that it actually runs**, not that the file exists, and fall back to the copy already bundled in `Streamer.app`. Do not "simplify" that back to an existence check.
+- MediaMTX HLS defaults to `hlsVariant: lowLatency`, which sits behind a `cookieCheck` redirect that returns **404** to ffmpeg and VLC. The receiver generates `hlsVariant: mpegts` + `hlsAlwaysRemux` so ordinary players and TVs work.
+- NDI needs **NDI Tools installed** (`/usr/local/lib/libndi.dylib`); `ndi-sender` links it via rpath. NDI output can only be switched on while a feed is actually live, because ffprobe reads the format from the running source.
 
 - ffmpeg `image2` file outputs MUST include `-y`, or on a restart the existing file triggers "Overwrite? [y/N] Not overwriting - exiting" and the process dies with no frames. This is fixed for preview + snapshot; remember it for any new file output.
 - `config.id` is PERSISTENT (saved). Preview/overlay/snapshot cache files are keyed by it, so they survive across runs. Orphaned ffmpeg from a previous run will fight over the same files — the on-quit `killAll` prevents this; do not regress it.

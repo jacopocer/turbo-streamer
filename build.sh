@@ -25,13 +25,34 @@ chmod +x "$BUNDLE/Contents/MacOS/$APP_NAME"
 # ── ffmpeg ───────────────────────────────────────────────────────────────────
 # Prefer native arm64 Homebrew ffmpeg.  The app sets DYLD_LIBRARY_PATH at
 # runtime so the bundled dylibs are found without any path rewriting.
-HOMEBREW_FFMPEG="/opt/homebrew/bin/ffmpeg"
-HOMEBREW_FFPROBE="/opt/homebrew/bin/ffprobe"
 BIN_DST="$BUNDLE/Contents/Resources/bin"
 LIB_DST="$BIN_DST/lib"
 
-if [ -f "$HOMEBREW_FFMPEG" ] && file "$HOMEBREW_FFMPEG" | grep -q arm64; then
-    echo "✅  Found native arm64 ffmpeg (Homebrew) — bundling with dylibs…"
+# Pick an ffmpeg that actually RUNS. Homebrew's can be installed but broken
+# (missing libass on this machine), so execution is the test, not existence.
+FFMPEG_SRC=""
+for c in "/opt/homebrew/bin" \
+         "$HOME/streamer/Streamer.app/Contents/Resources/bin" \
+         "./Streamer.app/Contents/Resources/bin"; do
+    if [ -x "$c/ffmpeg" ] && DYLD_LIBRARY_PATH="$c/lib" "$c/ffmpeg" -version >/dev/null 2>&1; then
+        FFMPEG_SRC="$c"; break
+    fi
+done
+HOMEBREW_FFMPEG="$FFMPEG_SRC/ffmpeg"
+HOMEBREW_FFPROBE="$FFMPEG_SRC/ffprobe"
+
+if [ -n "$FFMPEG_SRC" ] && [ -d "$FFMPEG_SRC/lib" ]; then
+    # An already-bundled set (ffmpeg + its dylibs) — copy it across as-is.
+    echo "✅  Reusing working ffmpeg from $FFMPEG_SRC"
+    mkdir -p "$LIB_DST"
+    cp "$HOMEBREW_FFMPEG" "$BIN_DST/ffmpeg"
+    [ -f "$HOMEBREW_FFPROBE" ] && cp "$HOMEBREW_FFPROBE" "$BIN_DST/ffprobe" || true
+    chmod +x "$BIN_DST/ffmpeg" "$BIN_DST/ffprobe" 2>/dev/null || true
+    cp -R "$FFMPEG_SRC/lib/." "$LIB_DST/"
+    echo "✅  Bundled $(ls "$LIB_DST" | wc -l | tr -d ' ') dylibs"
+
+elif [ -n "$FFMPEG_SRC" ]; then
+    echo "✅  Found native ffmpeg at $FFMPEG_SRC — bundling with dylibs…"
     mkdir -p "$LIB_DST"
 
     cp "$HOMEBREW_FFMPEG" "$BIN_DST/ffmpeg"
