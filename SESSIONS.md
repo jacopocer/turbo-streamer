@@ -17,6 +17,7 @@ Multiple AI chat sessions edit this repo at the same time. **Read this file befo
 _(none)_
 
 ### ✅ DONE (not yet folded into HANDOFF.md)
+- `comet-1` — Relay option B (turbolink relay secrets + `/v1/auth`, MediaMTX relay deploy assets), Streamer "Use relay" + SRT pre-flight probe with RTMP fallback + network passthrough + srt streamid input + encoder-behind diagnostic + slate on SRT; Receiver Direct/Relay per feed, MoQ off. Verified locally end to end; box deploy `deploy-relay.sh` owner-run. Docs updated. Both apps rebuilt + installed. Commit `39c3678`.
 - `comet-1` — DeckLink Format/Connector/10-bit controls + per-stream Codec picker (4K60: HEVC hw to SRT, x264 to platforms; h264 hw measured 0.88× on M2 Pro), Match source for explicit DeckLink formats; bundle renamed `Turbo Streamer.app`. `Models.swift`, `StreamManager.swift`, `StreamConfigCard.swift`, build scripts, docs. Both apps rebuilt + installed. Commit `56438ca`. Not run against a physical DeckLink.
 - `comet-1` — **Turbo Receiver** (new app, `receiver/`): MediaMTX ingest + RTSP/RTMP/HLS fan-out, NDI output for BirdDog decoders, HLS served as mpegts for TVs. Commits `7970ba3`, `43ada29`, `a641cc9`. Folded into HANDOFF.
 - `comet-1` — Turbo Streamer: live gap-free **mute/unmute** (`b2953d8`) and **network input** so an instance can consume a Receiver feed and restream it (`9ab25bf`). Folded into HANDOFF.
