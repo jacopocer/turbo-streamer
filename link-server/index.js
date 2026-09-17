@@ -6,6 +6,13 @@
 // and publish where they can be reached; the streamer polls and adds them as
 // destinations.
 //
+// Relay (option B): every session also carries credentials for the public
+// MediaMTX relay next door. The streamer can publish to the relay instead of
+// straight to a receiver (when the receiver sits behind NAT or UDP is blocked),
+// and each receiver can pull from it. MediaMTX asks this service, over
+// localhost, whether a publish/read is allowed (POST /v1/auth); the answer is
+// yes only for the session's own path with the session's own secrets.
+//
 // No dependencies: Node's own http module plus a JSON file for persistence.
 'use strict';
 const http = require('http');
@@ -20,14 +27,44 @@ const STORE = path.join(DATA, 'sessions.json');
 const TTL_MS = Number(process.env.TURBOLINK_TTL_HOURS || 24) * 3600 * 1000;
 const MAX_RECEIVERS = 32;
 
+// Public relay coordinates handed to both apps. Host must resolve straight to the
+// box (no Cloudflare proxy: SRT is UDP, RTMP is raw TCP).
+const RELAY = {
+  host: process.env.RELAY_HOST || 'turbostreamer.indigital.tv',
+  srtPort: Number(process.env.RELAY_SRT_PORT || 8890),
+  rtmpPort: Number(process.env.RELAY_RTMP_PORT || 1935),
+  latencyMs: Number(process.env.RELAY_LATENCY_MS || 200),   // internet-grade SRT buffer
+};
+
 // code: unambiguous alphabet (no 0/O/1/I) so it can be read aloud
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const newCode = () => Array.from(crypto.randomFillSync(new Uint8Array(6)))
   .map(b => ALPHABET[b % ALPHABET.length]).join('');
 const newSecret = () => crypto.randomBytes(24).toString('base64url');
 
-/** @type {Map<string, {code:string,secret:string,name:string,createdAt:number,receivers:Array}>} */
+/** @type {Map<string, {code:string,secret:string,name:string,createdAt:number,lastActive:number,receivers:Array,relay:{publishPass:string,readPass:string}}>} */
 let sessions = new Map();
+
+// What each side needs to use the relay. The streamer publishes with the same
+// url/key fields it uses for a direct receiver (the app composes "publish:" +
+// key for SRT, and "url/key" for RTMP); a receiver points a MediaMTX path source
+// at the read URL.
+function relayForStreamer(s) {
+  return {
+    host: RELAY.host, srtPort: RELAY.srtPort, rtmpPort: RELAY.rtmpPort, path: s.code,
+    latencyMs: RELAY.latencyMs,
+    srtURL: `srt://${RELAY.host}:${RELAY.srtPort}`,
+    streamKey: `${s.code}:streamer:${s.relay.publishPass}`,
+    rtmpURL: `rtmp://${RELAY.host}:${RELAY.rtmpPort}`,
+    rtmpKey: `${s.code}?user=streamer&pass=${s.relay.publishPass}`,
+  };
+}
+function relayForReceiver(s) {
+  return {
+    host: RELAY.host, srtPort: RELAY.srtPort, path: s.code, latencyMs: RELAY.latencyMs,
+    source: `srt://${RELAY.host}:${RELAY.srtPort}?streamid=read:${s.code}:receiver:${s.relay.readPass}`,
+  };
+}
 
 function load() {
   try {
@@ -42,12 +79,17 @@ function save() {
     fs.writeFileSync(STORE, JSON.stringify([...sessions.values()]), { mode: 0o600 });
   } catch (e) { console.error('save failed:', e.message); }
 }
+// A session lives TTL past its last use (poll, join, relay auth), not past its
+// creation: a code made the day before a show must still work during the show.
 function sweep() {
   const cutoff = Date.now() - TTL_MS;
   let dropped = 0;
-  for (const [code, s] of sessions) if (s.createdAt < cutoff) { sessions.delete(code); dropped++; }
+  for (const [code, s] of sessions) {
+    if (Math.max(s.createdAt, s.lastActive || 0) < cutoff) { sessions.delete(code); dropped++; }
+  }
   if (dropped) save();
 }
+function touch(s) { s.lastActive = Date.now(); }
 
 const json = (res, status, body) => {
   const b = Buffer.from(JSON.stringify(body));
@@ -73,11 +115,12 @@ function readBody(req) {
 }
 
 // Constant-time secret check, so a wrong secret leaks nothing by timing.
-function secretOk(session, given) {
-  if (!given) return false;
-  const a = Buffer.from(session.secret), b = Buffer.from(String(given));
+function sameSecret(expected, given) {
+  if (!given || !expected) return false;
+  const a = Buffer.from(String(expected)), b = Buffer.from(String(given));
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
+function secretOk(session, given) { return sameSecret(session.secret, given); }
 
 const str = (v, max = 200) => (typeof v === 'string' ? v.slice(0, max) : '');
 
@@ -96,11 +139,35 @@ const server = http.createServer(async (req, res) => {
       sweep();
       let code; do { code = newCode(); } while (sessions.has(code));
       const s = { code, secret: newSecret(), name: str(body.name) || 'Feed',
-                  createdAt: Date.now(), receivers: [] };
+                  createdAt: Date.now(), lastActive: Date.now(), receivers: [],
+                  relay: { publishPass: newSecret(), readPass: newSecret() } };
       sessions.set(code, s);
       save();
       return json(res, 201, { code: s.code, secret: s.secret,
-                              expiresAt: new Date(s.createdAt + TTL_MS).toISOString() });
+                              expiresAt: new Date(s.createdAt + TTL_MS).toISOString(),
+                              relay: relayForStreamer(s) });
+    }
+
+    // POST /v1/auth — MediaMTX (the relay, on this box) asks whether an action is
+    // allowed: {user, password, ip, action, path, protocol, id, query}. Only the
+    // session whose code is the path, with that session's own secret, may publish
+    // or read. External callers never reach this: nginx stamps X-Real-IP on
+    // everything it proxies, and MediaMTX calls over localhost without it.
+    if (req.method === 'POST' && url.pathname === '/v1/auth') {
+      if (req.headers['x-real-ip'] || req.headers['x-forwarded-for']) return json(res, 404, { error: 'not found' });
+      const body = await readBody(req);
+      const action = str(body.action, 20);
+      if (['api', 'metrics', 'pprof'].includes(action)) {
+        return json(res, /^(127\.|::1)/.test(str(body.ip, 64)) ? 200 : 401, {});
+      }
+      const s = sessions.get(str(body.path, 20).toUpperCase());
+      if (!s || !s.relay) return json(res, 401, {});
+      const pw = str(body.password, 200);
+      let ok = false;
+      if (action === 'publish') ok = sameSecret(s.relay.publishPass, pw);
+      else if (action === 'read') ok = sameSecret(s.relay.readPass, pw) || sameSecret(s.relay.publishPass, pw);
+      if (ok) { touch(s); save(); }
+      return json(res, ok ? 200 : 401, {});
     }
 
     // POST /v1/session/:code/join — a receiver publishes where to reach it
@@ -125,8 +192,10 @@ const server = http.createServer(async (req, res) => {
       s.receivers = s.receivers.filter(
         x => !(x.host === r.host && x.port === r.port && x.streamKey === r.streamKey));
       s.receivers.push(r);
+      touch(s);
       save();
-      return json(res, 200, { ok: true, receiverId: r.id, sessionName: s.name });
+      return json(res, 200, { ok: true, receiverId: r.id, sessionName: s.name,
+                              relay: s.relay ? relayForReceiver(s) : null });
     }
 
     // GET /v1/session/:code — streamer polls the joined receivers (secret required)
@@ -135,8 +204,10 @@ const server = http.createServer(async (req, res) => {
       if (!s) return json(res, 404, { error: 'unknown or expired code' });
       const given = req.headers['x-secret'] || url.searchParams.get('secret');
       if (!secretOk(s, given)) return json(res, 403, { error: 'bad secret' });
+      touch(s);
       return json(res, 200, { code: s.code, name: s.name, receivers: s.receivers,
-                              expiresAt: new Date(s.createdAt + TTL_MS).toISOString() });
+                              expiresAt: new Date(Math.max(s.createdAt, s.lastActive || 0) + TTL_MS).toISOString(),
+                              relay: s.relay ? relayForStreamer(s) : null });
     }
 
     // DELETE /v1/session/:code — streamer closes it

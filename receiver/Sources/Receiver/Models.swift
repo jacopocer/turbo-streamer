@@ -9,6 +9,8 @@ struct IngestKey: Identifiable, Codable, Equatable {
     var id: UUID = UUID()
     var name: String
     var key: String
+    var relaySource: String = ""     // relay read URL from the last Link (srt://…?streamid=read:…)
+    var pullFromRelay: Bool = false  // Relay mode: MediaMTX pulls this feed from the relay
 
     init(name: String, key: String = IngestKey.randomKey()) {
         self.name = name
@@ -27,6 +29,8 @@ struct IngestKey: Identifiable, Codable, Equatable {
         id   = (try? c.decode(UUID.self,   forKey: .id))   ?? UUID()
         name = (try? c.decode(String.self, forKey: .name)) ?? "Feed"
         key  = (try? c.decode(String.self, forKey: .key))  ?? IngestKey.randomKey()
+        relaySource   = (try? c.decode(String.self, forKey: .relaySource)) ?? ""
+        pullFromRelay = (try? c.decode(Bool.self,   forKey: .pullFromRelay)) ?? false
     }
 }
 

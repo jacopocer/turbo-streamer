@@ -33,7 +33,8 @@ A native macOS SwiftUI shell that orchestrates **bundled ffmpeg** subprocesses. 
 | Auto-reconnect + backoff | always on | 1→2→4→8→15s, resets after a healthy run |
 | Hang watchdog | always on | No frames 10s → restart + re-acquire device |
 | Freeze / black detection | always on | Warns when feed freezes or goes black |
-| Pre-flight check | always on | Verifies destination reachable before air |
+| Pre-flight check | always on | Verifies the destination before air. SRT: a real handshake probe; if UDP is blocked and the relay was linked, the stream goes RTMP to the relay by itself |
+| Encoder-behind warning | always on | Speed under 1x for ~3 s raises a plain-language card: change codec, fps or resolution |
 | Audible alerts | always on | Chimes on disconnect / recover / freeze |
 | Graceful shutdown | always on | SIGTERM→SIGKILL escalation; clean file finalize |
 | Power assertion | always on | Blocks idle-sleep while live; warns on lid-close sleep |
@@ -41,6 +42,7 @@ A native macOS SwiftUI shell that orchestrates **bundled ffmpeg** subprocesses. 
 | Backup RTMP | opt-in | Second ingest via `tee` (failure can't kill primary) |
 | Safety recording | opt-in | Records `.ts` to disk while streaming (crash-survivable) |
 | Adaptive bitrate | opt-in | Drops bitrate on instability, steps back up |
+| Passthrough (Network input) | opt-in | Relays the incoming stream as-is, no re-encode: zero added loss |
 | Drop/recover alerts | opt-in | Fire-and-forget webhook POST on drop & recover (→ Zapier/Make → WhatsApp/email) |
 
 ### Known limitations
@@ -93,8 +95,11 @@ It was built specifically for live event production where you need to:
   - **Safety recording** — records the program to disk (`~/Documents/TurboStreamer Recordings`) while streaming, as resilient `.ts`
   - **Fallback on input loss** — the app continuously grabs a recent frame (~1/sec) from the live feed; if the input drops, that **most recent frame** is held on-air (instead of black), then it cuts back when the feed returns. Optionally override with a custom card.
   - **Adaptive bitrate** — lowers bitrate when the connection is unstable and steps it back up once stable
-  - **Pre-flight check** — verifies the destination is reachable before going live
+  - **Pre-flight check** — verifies the destination before going live. For SRT it performs a real handshake with a wrong streamid: a rejection means the UDP path is open; a timeout means blocked. If blocked and the stream was linked through the relay, it switches to the relay's RTMP door for that run
+  - **Encoder-behind warning** — measured from ffmpeg's own speed: under 1x for ~3 s shows a card naming the fix (codec, fps, resolution). Machine-independent
   - **Audible alerts** — chimes on disconnect, recovery, and freeze/black
+- **Network input, direct or relayed** — pull a live RTSP/RTMP/SRT/HTTP source (a Turbo Receiver feed, the relay, a camera). An `srt://…?streamid=…` URL works as-is. **Relay as-is** forwards the stream without decoding or re-encoding (`-c copy`): zero added loss, almost no CPU; overlay, scaling, fps, mute and detectors don't apply
+- **Pairing: direct or via relay** — "Link receiver" shows a code; each Turbo Receiver enters it. *Use* on a receiver sends straight to it (LAN, Tailscale, forwarded port). *Use relay* publishes to our public relay instead, for when there's no direct path; each receiver then sets its feed to **Relay** and pulls from it. Relay credentials are per session and checked on every publish and read
 - **Remembers your setup** — stream configs persist across launches automatically
 - **Smart defaults** — bitrate auto-fills to a sensible value when you change resolution
 - **Live metrics** — uptime, fps, bitrate, and encode speed shown per stream on the Live tab

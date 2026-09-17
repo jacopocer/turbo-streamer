@@ -12,6 +12,10 @@ Environment=PORT=8814
 Environment=HOST=127.0.0.1
 Environment=TURBOLINK_DATA=/opt/turbolink/data
 Environment=NODE_ENV=production
+Environment=RELAY_HOST=turbostreamer.indigital.tv
+Environment=RELAY_SRT_PORT=8890
+Environment=RELAY_RTMP_PORT=1935
+Environment=RELAY_LATENCY_MS=200
 Restart=on-failure
 RestartSec=5
 

@@ -2,7 +2,8 @@ import Foundation
 
 /// Client for the turbolink rendezvous. The streamer opens a session, shows the
 /// code, and polls for receivers that joined. Only coordinates travel through
-/// the server — the stream itself goes straight to each receiver.
+/// the server; the stream goes straight to each receiver, or through the relay
+/// next to it when the streamer picks "Use relay".
 enum LinkClient {
     static let defaultBase = "https://turbostreamer.indigital.tv"
 
@@ -12,7 +13,27 @@ enum LinkClient {
         return stored.isEmpty ? defaultBase : stored
     }
 
-    struct Session: Decodable { let code: String; let secret: String; let expiresAt: String }
+    /// The public relay's coordinates for this session (option B): the streamer publishes
+    /// here instead of straight to a receiver when there is no direct path (NAT, blocked
+    /// UDP), and each receiver pulls from it. The key strings are composed by the server so
+    /// they drop into the same url/key fields as a direct destination.
+    struct Relay: Decodable, Equatable {
+        let host: String
+        let srtPort: Int
+        let rtmpPort: Int
+        let path: String
+        let latencyMs: Int
+        let srtURL: String
+        let streamKey: String
+        let rtmpURL: String
+        let rtmpKey: String
+    }
+    struct Session: Decodable {
+        let code: String
+        let secret: String
+        let expiresAt: String
+        let relay: Relay?
+    }
     struct Receiver: Decodable, Identifiable, Equatable {
         let id: String
         let label: String
