@@ -1205,7 +1205,7 @@ final class StreamManager: ObservableObject {
     private func previewStyleSignature(_ c: StreamConfig?) -> String {
         guard let c else { return "" }
         let o = c.overlay
-        return [c.resolution.rawValue, c.inputType.rawValue, c.filePath, c.videoDeviceIndex,
+        return [c.resolution.rawValue, c.inputType.rawValue, c.filePath, c.networkURL, c.videoDeviceIndex,
                 c.deckLinkDeviceName, "\(o.enabled)", o.fontChoice, o.customFontPath, "\(o.fontSize)",
                 o.colorHex, o.position.rawValue, "\(o.boxEnabled)", String(format: "%.2f", o.boxOpacity)]
             .joined(separator: "|")
@@ -1256,6 +1256,9 @@ final class StreamManager: ObservableObject {
             a += ["-f", "decklink", "-i", config.deckLinkDeviceName]
         case .capture:
             a += ["-f", "avfoundation", "-framerate", captureFPS, "-i", "\(config.videoDeviceIndex):none"]
+        case .network where !config.networkURL.isEmpty:
+            if config.networkURL.lowercased().hasPrefix("rtsp") { a += ["-rtsp_transport", "tcp"] }
+            a += ["-i", config.networkURL]
         default:
             let (w, h) = config.resolution.outputDimensions
             a += ["-f", "lavfi", "-i", "color=c=0x1a1a1a:s=\(w)x\(h):rate=12"]
@@ -1317,6 +1320,14 @@ final class StreamManager: ObservableObject {
                 "-thread_queue_size", "1024",
                 "-i", config.deckLinkDeviceName
             ]
+        } else if config.inputType == .network {
+            // Live network source (e.g. Turbo Receiver): no -re and no -stream_loop —
+            // the sender already paces it. RTSP over TCP is far more reliable than the
+            // UDP default on a busy LAN.
+            var a = ["-hide_banner", "-loglevel", "info"]
+            if config.networkURL.lowercased().hasPrefix("rtsp") { a += ["-rtsp_transport", "tcp"] }
+            a += ["-thread_queue_size", "1024", "-i", config.networkURL]
+            args = a
         } else {
             // AVFoundation capture: don't force a resolution, and use a framerate the
             // device actually supports (probed). The default (29.97) and the app's 25

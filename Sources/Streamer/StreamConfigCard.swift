@@ -229,6 +229,8 @@ struct StreamConfigCard: View {
                     fileInputSection
                 } else if config.inputType == .decklink {
                     deckLinkInputSection
+                } else if config.inputType == .network {
+                    networkInputSection
                 } else {
                     captureInputSection
                 }
@@ -337,6 +339,18 @@ struct StreamConfigCard: View {
                 await manager.refreshAVDevices()
             }
             Spacer()
+        }
+    }
+
+    private var networkInputSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            labeled("Source URL") {
+                TextField("rtsp://192.168.0.107:8554/streamkey", text: $config.networkURL)
+                    .textFieldStyle(.roundedBorder)
+            }
+            Text("RTSP, RTMP, SRT or HTTP. From Turbo Receiver, copy the \u{201C}OBS · Turbo Streamer\u{201D} URL.")
+                .font(.custom("SofiaPro", size: 10))
+                .foregroundStyle(Color.white.opacity(0.4))
         }
     }
 
