@@ -5,6 +5,10 @@ struct ContentView: View {
     @EnvironmentObject var server: ServerManager
     @State private var newKeyName = ""
     @State private var showLog = false
+    @State private var linkingKey: UUID? = nil     // feed whose pairing popover is open
+    @State private var linkCode = ""
+    @State private var linkStatus: String? = nil
+    @State private var linking = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -112,6 +116,23 @@ struct ContentView: View {
                       ? "Publish this feed as an NDI source on the LAN (for the BirdDog decoders)"
                       : "NDI unavailable — needs NDI Tools installed and ndi-sender bundled")
 
+                Button {
+                    linkCode = ""; linkStatus = nil
+                    linkingKey = (linkingKey == key.id) ? nil : key.id
+                } label: {
+                    Label("Link", systemImage: "link")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.secondary)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .help("Enter the code shown by Turbo Streamer to link this feed automatically")
+                .popover(isPresented: Binding(
+                    get: { linkingKey == key.id },
+                    set: { if !$0 { linkingKey = nil } }), arrowEdge: .bottom) {
+                    linkPopover(key)
+                }
+
                 Menu {
                     Button("Regenerate key") { server.regenerateKey(key) }
                     Divider()
@@ -130,6 +151,65 @@ struct ContentView: View {
         .background(Color(red: 0.12, green: 0.12, blue: 0.12))
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.08), lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private func linkPopover(_ key: IngestKey) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Link to Turbo Streamer")
+                .font(.system(size: 13, weight: .semibold))
+            Text("Type the code shown by Turbo Streamer. This receiver tells it where to send the stream, so nothing has to be pasted by hand. The video never passes through the server.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            TextField("ABC123", text: $linkCode)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 15, design: .monospaced))
+                .onSubmit { sendLink(key) }
+
+            Text("It will publish: srt://\(server.selectedAddress):\(Ports.srt) · key \(key.key)")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Button(linking ? "Linking…" : "Link") { sendLink(key) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(linking || linkCode.trimmingCharacters(in: .whitespaces).count < 4)
+                Spacer()
+                if let s = linkStatus {
+                    Text(s)
+                        .font(.system(size: 11))
+                        .foregroundStyle(s.hasPrefix("✓") ? Color.green : Color.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(16)
+        .frame(width: 380)
+    }
+
+    private func sendLink(_ key: IngestKey) {
+        let code = linkCode.trimmingCharacters(in: .whitespaces)
+        guard !linking, code.count >= 4 else { return }
+        linking = true
+        linkStatus = nil
+        let label = Host.current().localizedName ?? "Receiver"
+        Task {
+            do {
+                let r = try await LinkClient.join(code: code,
+                                                  label: "\(label) · \(key.name)",
+                                                  host: server.selectedAddress,
+                                                  port: Ports.srt,
+                                                  streamKey: key.key,
+                                                  latencyMs: 120)
+                linkStatus = "✓ Linked to \(r.sessionName)"
+            } catch {
+                linkStatus = "✗ \(error.localizedDescription)"
+            }
+            linking = false
+        }
     }
 
     private func metric(_ s: String) -> some View {
