@@ -41,7 +41,7 @@ PORT=8814 TURBOLINK_DATA=./data node index.js
 ## Deploy
 
 `deploy/deploy.sh` — new service on the production box: `/opt/turbolink`, port
-**8814**, `turbo.example.org`.
+**8814**, `turbo.example.com`.
 
 Port 8814 was picked against the ecosystem's own allocation table in
 `~/coordination/STATE.md`, not guessed: 3000/3100, 8787-8793 and
