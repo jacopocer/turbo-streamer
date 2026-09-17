@@ -177,6 +177,8 @@ final class ServerManager: ObservableObject {
         rtspAddress: :\(Ports.rtsp)
         hls: yes
         hlsAddress: :\(Ports.hls)
+        hlsVariant: mpegts
+        hlsAlwaysRemux: yes
         webrtc: no
         srt: no
         paths:
