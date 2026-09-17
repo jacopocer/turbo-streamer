@@ -6,6 +6,7 @@ enum InputType: String, CaseIterable, Identifiable, Codable {
     case file     = "File"
     case capture  = "Capture Card"
     case decklink = "Blackmagic"
+    case network  = "Network"
     var id: String { rawValue }
 }
 
@@ -126,6 +127,7 @@ struct StreamConfig: Identifiable, Codable {
     var videoDeviceIndex: String      = "0"
     var audioDeviceIndex: String      = ""
     var deckLinkDeviceName: String    = ""   // device name as reported by ffmpeg -f decklink -list_devices
+    var networkURL: String            = ""   // live RTSP/RTMP/SRT/HTTP source (e.g. from Turbo Receiver)
 
     // Failsafe options
     var backupRTMPURL: String         = ""    // full backup destination (url/key); empty = none
@@ -147,7 +149,7 @@ struct StreamConfig: Identifiable, Codable {
     enum CodingKeys: String, CodingKey {
         case id, name, rtmpPreset, rtmpURL, streamKey, videoBitrate, audioBitrate, fps,
              fpsMatchSource, resolution, inputType, filePath, videoDeviceIndex, audioDeviceIndex,
-             deckLinkDeviceName, backupRTMPURL, safetyRecording, fallbackEnabled,
+             deckLinkDeviceName, networkURL, backupRTMPURL, safetyRecording, fallbackEnabled,
              fallbackMediaPath, adaptiveBitrate, overlay
     }
 
@@ -168,6 +170,7 @@ struct StreamConfig: Identifiable, Codable {
         videoDeviceIndex   = (try? c.decode(String.self,          forKey: .videoDeviceIndex)) ?? "0"
         audioDeviceIndex   = (try? c.decode(String.self,          forKey: .audioDeviceIndex)) ?? ""
         deckLinkDeviceName = (try? c.decode(String.self,          forKey: .deckLinkDeviceName)) ?? ""
+        networkURL         = (try? c.decode(String.self,          forKey: .networkURL)) ?? ""
         backupRTMPURL      = (try? c.decode(String.self,          forKey: .backupRTMPURL)) ?? ""
         safetyRecording    = (try? c.decode(Bool.self,            forKey: .safetyRecording)) ?? false
         fallbackEnabled    = (try? c.decode(Bool.self,            forKey: .fallbackEnabled)) ?? false

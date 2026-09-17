@@ -222,6 +222,9 @@ struct SetupView: View {
             if config.streamKey.trimmingCharacters(in: .whitespaces).isEmpty {
                 return "\(config.name): stream key is required."
             }
+            if config.inputType == .network && config.networkURL.trimmingCharacters(in: .whitespaces).isEmpty {
+                return "\(config.name): no source URL."
+            }
             if config.inputType == .file && config.filePath.isEmpty {
                 return "\(config.name): no video file selected."
             }
