@@ -96,6 +96,22 @@ struct ContentView: View {
                     metric("\(st.readers) reader\(st.readers == 1 ? "" : "s")")
                 }
 
+                Button {
+                    server.toggleNDI(key)
+                } label: {
+                    let on = server.ndiEnabled.contains(key.key)
+                    Label("NDI", systemImage: on ? "antenna.radiowaves.left.and.right"
+                                                 : "antenna.radiowaves.left.and.right.slash")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(on ? Color.accentColor : Color.secondary)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .disabled(!server.ndiAvailable || (!live && !server.ndiEnabled.contains(key.key)))
+                .help(server.ndiAvailable
+                      ? "Publish this feed as an NDI source on the LAN (for the BirdDog decoders)"
+                      : "NDI unavailable — needs NDI Tools installed and ndi-sender bundled")
+
                 Menu {
                     Button("Regenerate key") { server.regenerateKey(key) }
                     Divider()

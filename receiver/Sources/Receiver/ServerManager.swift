@@ -15,6 +15,16 @@ final class ServerManager: ObservableObject {
     @Published private(set) var isRunning = false
     @Published private(set) var statuses: [String: PathStatus] = [:]
     @Published private(set) var logLines: [String] = []
+    @Published private(set) var ndiEnabled: Set<String> = []      // keys currently emitting NDI
+
+    // NDI bridge processes, per key: ffmpeg decoder + ndi-sender, plus a supervisor.
+    var ndiDecoders: [String: Process] = [:]
+    var ndiSenders:  [String: Process] = [:]
+    var ndiTasks:    [String: Task<Void, Never>] = [:]
+
+    func setNDIEnabled(_ on: Bool, for key: String) {
+        if on { ndiEnabled.insert(key) } else { ndiEnabled.remove(key) }
+    }
     @Published private(set) var addresses: [String] = []
     @Published var selectedAddress: String = ""
 
@@ -139,6 +149,7 @@ final class ServerManager: ObservableObject {
     }
 
     func stop() {
+        stopAllNDI()
         pollTask?.cancel(); pollTask = nil
         process?.terminate()
         process = nil
@@ -148,6 +159,7 @@ final class ServerManager: ObservableObject {
 
     /// SIGKILL on quit so the server never orphans and keeps the ports bound.
     func killServer() {
+        stopAllNDI()
         pollTask?.cancel()
         if let p = process, p.isRunning { kill(p.processIdentifier, SIGKILL) }
         process = nil
@@ -277,7 +289,7 @@ final class ServerManager: ObservableObject {
 
     // MARK: - Log
 
-    private func appendLog(_ text: String) {
+    func appendLog(_ text: String) {
         let incoming = text.components(separatedBy: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
