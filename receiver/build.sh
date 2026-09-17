@@ -58,6 +58,17 @@ if [ -x ndi/bin/ndi-sender ]; then
     cp ndi/bin/ndi-sender ndi/bin/ndi-find "$BIN_DST/" 2>/dev/null || cp ndi/bin/ndi-sender "$BIN_DST/"
     chmod +x "$BIN_DST/ndi-sender" 2>/dev/null || true
     echo "✅  Bundled ndi-sender"
+    # NDI runtime bundled too, so the app runs without installing NDI Tools.
+    # Internal use only — the NDI licence restricts redistribution.
+    if [ -f /usr/local/lib/libndi.dylib ]; then
+        mkdir -p "$BIN_DST/lib"
+        cp /usr/local/lib/libndi.dylib "$BIN_DST/lib/libndi.dylib"
+        [ -f /usr/local/lib/libndi_licenses.txt ] && \
+            cp /usr/local/lib/libndi_licenses.txt "$BUNDLE/Contents/Resources/" || true
+        echo "✅  Bundled NDI runtime"
+    else
+        echo "⚠️   NDI runtime not found — app will need NDI Tools installed"
+    fi
 else
     echo "⚠️   ndi/bin/ndi-sender missing — run ndi/build-ndi.sh (needs NDI SDK headers)"
 fi

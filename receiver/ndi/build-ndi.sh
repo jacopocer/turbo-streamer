@@ -20,6 +20,9 @@ done
 echo "🔨  headers: $INC"
 mkdir -p bin
 for t in ndi-sender ndi-find; do
-    clang -O2 -Wall -I"$INC" "$t.c" -L/usr/local/lib -lndi -Wl,-rpath,/usr/local/lib -o "bin/$t"
+    # Look for libndi next to the binary first (bundled inside the .app), then
+    # fall back to the system copy installed by NDI Tools.
+    clang -O2 -Wall -I"$INC" "$t.c" -L/usr/local/lib -lndi \
+          -Wl,-rpath,@loader_path/lib -Wl,-rpath,/usr/local/lib -o "bin/$t"
     echo "✅  bin/$t"
 done

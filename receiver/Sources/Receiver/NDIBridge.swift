@@ -18,7 +18,8 @@ extension ServerManager {
     /// NDI needs our sender plus the NDI runtime that NDI Tools installs.
     var ndiAvailable: Bool {
         FileManager.default.isExecutableFile(atPath: ndiSenderPath)
-            && FileManager.default.fileExists(atPath: "/usr/local/lib/libndi.dylib")
+            && (FileManager.default.fileExists(atPath: binDir + "/lib/libndi.dylib")
+                || FileManager.default.fileExists(atPath: "/usr/local/lib/libndi.dylib"))
             && FileManager.default.isExecutableFile(atPath: ffmpegPath)
     }
 
