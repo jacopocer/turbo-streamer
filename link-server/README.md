@@ -35,11 +35,19 @@ over the phone.
 ## Run locally
 
 ```
-PORT=8791 TURBOLINK_DATA=./data node index.js
+PORT=8814 TURBOLINK_DATA=./data node index.js
 ```
 
 ## Deploy
 
 `deploy/deploy.sh` — new service on the production box: `/opt/turbolink`, port
-8791, `link.indigital.tv`. It adds a systemd unit and an nginx site and touches
+**8814**, `turbo.indigital.tv`.
+
+Port 8814 was picked against the ecosystem's own allocation table in
+`~/indigital-coordination/STATE.md`, not guessed: 3000/3100, 8787-8793 and
+8811-8813 are taken, 8794-8800 is the reserved boot-check band and 8801-8810 the
+dev-server band, so 8814 is the first free service port. Per that protocol it
+must be **declared on SYNC.md and verified free on the box** before the first
+deploy. An earlier draft of this service used 8791, which is garibaldi
+staging's live traffic — the garibaldi session caught it. It adds a systemd unit and an nginx site and touches
 nothing already running. **Server work is authorized per run by the owner.**

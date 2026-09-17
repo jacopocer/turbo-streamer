@@ -2,14 +2,14 @@
 # Deploys turbolink to the production box.
 #
 # Server work is the owner's to authorize — run this only when he explicitly
-# asks for this deploy. It installs a NEW service (/opt/turbolink, port 8791,
-# link.indigital.tv) and touches nothing that already runs on the box.
+# asks for this deploy. It installs a NEW service (/opt/turbolink, port 8814,
+# turbo.indigital.tv) and touches nothing that already runs on the box.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 HOST="${TURBOLINK_DEPLOY_HOST:-root@136.244.104.119}"
 SSH_KEY="${TURBOLINK_SSH_KEY:-$HOME/.ssh/id_ed25519}"
-DOMAIN="${TURBOLINK_DOMAIN:-link.indigital.tv}"
+DOMAIN="${TURBOLINK_DOMAIN:-turbo.indigital.tv}"
 ssh_do() { ssh -i "$SSH_KEY" "$HOST" "$@"; }
 
 echo "== turbolink deploy → $HOST ($DOMAIN) =="
@@ -30,6 +30,6 @@ ssh_do "systemctl daemon-reload && systemctl enable --now turbolink-api && syste
 ssh_do "nginx -t && systemctl reload nginx"
 
 echo "== health check =="
-ssh_do "curl -fsS http://127.0.0.1:8791/health" && echo
+ssh_do "curl -fsS http://127.0.0.1:8814/health" && echo
 curl -fsS "https://$DOMAIN/health" && echo
 echo "== done =="
