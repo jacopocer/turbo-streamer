@@ -101,6 +101,8 @@ final class ServerManager: ObservableObject {
     func ingestURL(_ k: IngestKey) -> String { "rtmp://\(selectedAddress):\(Ports.rtmp)/\(k.key)" }
     func rtspURL(_ k: IngestKey)   -> String { "rtsp://\(selectedAddress):\(Ports.rtsp)/\(k.key)" }
     func hlsURL(_ k: IngestKey)    -> String { "http://\(selectedAddress):\(Ports.hls)/\(k.key)" }
+    /// Low-latency publish endpoint. The path travels in the SRT streamid.
+    func srtURL(_ k: IngestKey)    -> String { "srt://\(selectedAddress):\(Ports.srt)  (streamid: publish:\(k.key))" }
 
     // MARK: - Server lifecycle
 
@@ -172,15 +174,16 @@ final class ServerManager: ObservableObject {
         api: yes
         apiAddress: 127.0.0.1:\(Ports.api)
         rtmp: yes
-        rtmpAddress: :\(Ports.rtmp)
+        rtmpAddress: 0.0.0.0:\(Ports.rtmp)
         rtsp: yes
-        rtspAddress: :\(Ports.rtsp)
+        rtspAddress: 0.0.0.0:\(Ports.rtsp)
         hls: yes
-        hlsAddress: :\(Ports.hls)
+        hlsAddress: 0.0.0.0:\(Ports.hls)
         hlsVariant: mpegts
         hlsAlwaysRemux: yes
         webrtc: no
-        srt: no
+        srt: yes
+        srtAddress: 0.0.0.0:\(Ports.srt)
         paths:
 
         """

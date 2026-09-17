@@ -47,6 +47,17 @@ struct StreamConfigCard: View {
                         .foregroundStyle(config.rtmpPreset == .custom ? .white : Color.white.opacity(0.4))
                 }
 
+                if config.rtmpURL.lowercased().hasPrefix("srt://") {
+                    labeled("SRT latency (ms)") {
+                        TextField("120", value: $config.srtLatencyMs, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 70)
+                    }
+                    Text("Buffer for retransmission. Lower = less delay, less tolerance to packet loss. 80–200 ms is the usual range.")
+                        .font(.custom("SofiaPro", size: 10))
+                        .foregroundStyle(Color.white.opacity(0.4))
+                }
+
                 labeled("Stream Key") {
                     TextField("Your stream key", text: $config.streamKey)
                         .textFieldStyle(.roundedBorder)

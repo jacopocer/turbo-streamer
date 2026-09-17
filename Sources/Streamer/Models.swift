@@ -128,6 +128,7 @@ struct StreamConfig: Identifiable, Codable {
     var audioDeviceIndex: String      = ""
     var deckLinkDeviceName: String    = ""   // device name as reported by ffmpeg -f decklink -list_devices
     var networkURL: String            = ""   // live RTSP/RTMP/SRT/HTTP source (e.g. from Turbo Receiver)
+    var srtLatencyMs: Int             = 120  // SRT receiver buffer; the latency/robustness trade-off
 
     // Failsafe options
     var backupRTMPURL: String         = ""    // full backup destination (url/key); empty = none
@@ -149,7 +150,7 @@ struct StreamConfig: Identifiable, Codable {
     enum CodingKeys: String, CodingKey {
         case id, name, rtmpPreset, rtmpURL, streamKey, videoBitrate, audioBitrate, fps,
              fpsMatchSource, resolution, inputType, filePath, videoDeviceIndex, audioDeviceIndex,
-             deckLinkDeviceName, networkURL, backupRTMPURL, safetyRecording, fallbackEnabled,
+             deckLinkDeviceName, networkURL, srtLatencyMs, backupRTMPURL, safetyRecording, fallbackEnabled,
              fallbackMediaPath, adaptiveBitrate, overlay
     }
 
@@ -171,6 +172,7 @@ struct StreamConfig: Identifiable, Codable {
         audioDeviceIndex   = (try? c.decode(String.self,          forKey: .audioDeviceIndex)) ?? ""
         deckLinkDeviceName = (try? c.decode(String.self,          forKey: .deckLinkDeviceName)) ?? ""
         networkURL         = (try? c.decode(String.self,          forKey: .networkURL)) ?? ""
+        srtLatencyMs       = (try? c.decode(Int.self,             forKey: .srtLatencyMs)) ?? 120
         backupRTMPURL      = (try? c.decode(String.self,          forKey: .backupRTMPURL)) ?? ""
         safetyRecording    = (try? c.decode(Bool.self,            forKey: .safetyRecording)) ?? false
         fallbackEnabled    = (try? c.decode(Bool.self,            forKey: .fallbackEnabled)) ?? false

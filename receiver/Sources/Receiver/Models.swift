@@ -52,4 +52,5 @@ enum Ports {
     static let rtsp = 8554
     static let hls  = 8888
     static let api  = 9997
+    static let srt  = 8890
 }
