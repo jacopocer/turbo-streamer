@@ -45,6 +45,8 @@ final class StreamManager: ObservableObject {
     private var overlayText:    [UUID: String]            = [:]   // live overlay text per stream
     private var captureFramerate: [UUID: String]          = [:]   // device-supported fps, probed once
     private var droppedStreams: Set<UUID> = []   // healthy streams that dropped (pairs drop↔recover alerts)
+    @Published private(set) var mutedStreams: Set<UUID> = []   // live streams with the outgoing audio silenced
+    private var stdinPipes: [UUID: Pipe] = [:]   // ffmpeg stdin, for runtime filter commands (mute)
     @Published private(set) var previewing: Set<UUID>     = []     // configs with a live preview running
     private var previewProcesses: [UUID: Process]         = [:]
     private var previewPipes:     [UUID: Pipe]            = [:]
@@ -75,6 +77,9 @@ final class StreamManager: ObservableObject {
         }
         savedProfileNames = Self.loadProfiles().map(\.name)
         alertWebhookURL   = UserDefaults.standard.string(forKey: Self.alertWebhookKey) ?? ""
+
+        // Writing a filter command to a dead ffmpeg's stdin must not kill the app.
+        signal(SIGPIPE, SIG_IGN)
 
         // Fresh debug log each session
         try? "=== session start \(Date()) ===\n".write(to: debugLogURL(), atomically: true, encoding: .utf8)
@@ -267,6 +272,8 @@ final class StreamManager: ObservableObject {
             statuses[id]?.phase = .stopped
             appendLog("■ Stream stopped by user.", to: id)
         }
+        mutedStreams.remove(id)
+        stdinPipes[id] = nil
         closeLogFile(id: id)
         refreshPowerAssertion()   // release the wake-lock if nothing is live
     }
@@ -627,6 +634,8 @@ final class StreamManager: ObservableObject {
             if statuses[id]?.phase.isActive == true { statuses[id]?.phase = .stopped }
             lastProgressAt[id] = nil
             droppedStreams.remove(id)
+            mutedStreams.remove(id)
+            stdinPipes[id] = nil
             closeLogFile(id: id)
             refreshPowerAssertion()   // release the wake-lock if this was the last live stream
         }
@@ -752,7 +761,7 @@ final class StreamManager: ObservableObject {
         let args = buildArgs(for: config, recordingURL: recordingURL,
                              bitrateOverride: bitrate, snapshotURL: snapURL,
                              overlayTextURL: overlayURL, captureFPS: captureFramerate[id],
-                             outputFPS: outputFPS)
+                             outputFPS: outputFPS, muted: mutedStreams.contains(id))
 
         if let rec = recordingURL {
             appendLog("● Safety recording → \(rec.path)", to: id)
@@ -761,7 +770,10 @@ final class StreamManager: ObservableObject {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ffmpegPath)
         process.arguments     = args
-        process.standardInput = FileHandle.nullDevice
+        // stdin stays open as a pipe so we can send runtime filter commands (mute/unmute).
+        let stdinPipe = Pipe()
+        process.standardInput = stdinPipe
+        stdinPipes[id] = stdinPipe
 
         let libDir = URL(fileURLWithPath: ffmpegPath)
             .deletingLastPathComponent()
@@ -1004,6 +1016,28 @@ final class StreamManager: ObservableObject {
     }
 
     /// Update the on-air overlay text live (drawtext picks it up within a frame).
+    // MARK: - Live audio mute
+
+    /// Toggles the outgoing audio of a live stream, live and gap-free: ffmpeg accepts
+    /// runtime filter commands on stdin, so this just gives the `volume` filter a new
+    /// value — nothing is restarted and the video is untouched. `mutedStreams` also seeds
+    /// the filter's initial value in buildArgs, so a reconnect comes back muted if it was.
+    func toggleMute(id: UUID) {
+        guard statuses[id]?.phase.isActive == true else { return }
+        let nowMuted = !mutedStreams.contains(id)
+        if nowMuted { mutedStreams.insert(id) } else { mutedStreams.remove(id) }
+        sendFilterCommand("volume -1 volume \(nowMuted ? "0" : "1")", to: id)
+        appendLog(nowMuted ? "🔇 Audio muted." : "🔊 Audio unmuted.", to: id)
+    }
+
+    /// Sends one runtime filter command to a running ffmpeg over its stdin.
+    /// Format: `c<target> <time|-1> <command> <argument>` (ffmpeg interactive mode).
+    private func sendFilterCommand(_ command: String, to id: UUID) {
+        guard let handle = stdinPipes[id]?.fileHandleForWriting,
+              let data = "c\(command)\n".data(using: .utf8) else { return }
+        try? handle.write(contentsOf: data)   // SIGPIPE ignored; a dead pipe just fails
+    }
+
     func setOverlayText(_ text: String, for id: UUID) {
         overlayText[id] = text
         try? text.write(to: overlayTextURL(for: id), atomically: true, encoding: .utf8)
@@ -1257,7 +1291,7 @@ final class StreamManager: ObservableObject {
         return captureFPS ?? config.fps
     }
 
-    private func buildArgs(for config: StreamConfig, recordingURL: URL?, bitrateOverride: String? = nil, snapshotURL: URL? = nil, overlayTextURL: URL? = nil, captureFPS: String? = nil, outputFPS: String? = nil) -> [String] {
+    private func buildArgs(for config: StreamConfig, recordingURL: URL?, bitrateOverride: String? = nil, snapshotURL: URL? = nil, overlayTextURL: URL? = nil, captureFPS: String? = nil, outputFPS: String? = nil, muted: Bool = false) -> [String] {
         let videoBitrate = bitrateOverride ?? config.videoBitrate
         let bitrateNum = Int(videoBitrate.replacingOccurrences(of: "k", with: "")) ?? 4500
         let bufsize    = "\(bitrateNum * 2)k"
@@ -1329,7 +1363,11 @@ final class StreamManager: ObservableObject {
                 ]
             }
         }
-        let audioArgs = ["-c:a", "aac", "-b:a", config.audioBitrate, "-ar", "48000", "-ac", "2"]
+        // The volume filter is ALWAYS in the chain so mute/unmute can be toggled live via a
+        // runtime command on ffmpeg's stdin (no restart, no gap). Its initial value carries
+        // the current mute state, so a reconnect comes back muted if it was muted.
+        let audioArgs = ["-af", "volume=\(muted ? "0" : "1")"]
+            + ["-c:a", "aac", "-b:a", config.audioBitrate, "-ar", "48000", "-ac", "2"]
 
         // ── Output ──────────────────────────────────────────────────────────
         // Simplest proven path (single dest, no snapshot) → plain -vf + flv.
