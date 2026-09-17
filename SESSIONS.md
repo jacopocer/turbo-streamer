@@ -17,6 +17,9 @@ Multiple AI chat sessions edit this repo at the same time. **Read this file befo
 _(none)_
 
 ### ✅ DONE (not yet folded into HANDOFF.md)
+- `comet-1` — **Turbo Receiver** (new app, `receiver/`): MediaMTX ingest + RTSP/RTMP/HLS fan-out, NDI output for BirdDog decoders, HLS served as mpegts for TVs. Commits `7970ba3`, `43ada29`, `a641cc9`. Folded into HANDOFF.
+- `comet-1` — Turbo Streamer: live gap-free **mute/unmute** (`b2953d8`) and **network input** so an instance can consume a Receiver feed and restream it (`9ab25bf`). Folded into HANDOFF.
+- `comet-1` — `build.sh` now selects an ffmpeg that actually runs (Homebrew's is broken here). Both apps rebuilt and installed to /Applications.
 - `comet-1` — Drop/recover webhook alerts (opt-in global URL + fire-and-forget POST, paired drop/recover via `streamDropped`/`streamRecovered`, Alerts popover with Send-test feedback). Incl. all 11 /code-review fixes. `StreamManager.swift`, `SetupView.swift`, docs. Folded into HANDOFF. Commit `54ca0b8`, pushed.
 - `comet-1` — App icon replaced with new face image: `Resources/AppIcon.icns` regenerated (squared to 1024² transparent + iconutil); the in-app wobbling icon derives from `applicationIconImage`, so it updates automatically. Rebuilt + installed to /Applications. Commit `e50bbee`, pushed.
 - `comet-1` — Plain-language diagnostics: `Diagnostic` catalog + "What's happening" panel atop each Live card; **Topolino & Pippo** voice; freeze/black badges re-themed. `Models.swift`, `StreamStatusCard.swift`, docs. Folded into HANDOFF.md. Commit `7953214`. (Matcher unit-tested 15/15; panel rendering pending owner's visual check.)
