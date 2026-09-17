@@ -6,6 +6,12 @@ struct StreamConfigCard: View {
     @Binding var config: StreamConfig
     @EnvironmentObject var manager: StreamManager
     @State private var pasteHint: String? = nil
+    @State private var showLink = false
+    @State private var linkSession: LinkClient.Session? = nil
+    @State private var linkReceivers: [LinkClient.Receiver] = []
+    @State private var linkError: String? = nil
+    @State private var linkBusy = false
+    @State private var linkPoll: Task<Void, Never>? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -81,6 +87,16 @@ struct StreamConfigCard: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .help("Paste a combined rtmp://host/app/streamkey and split it into the URL + key fields")
+
+                    Button { showLink.toggle() } label: {
+                        Label("Link receiver", systemImage: "link")
+                            .font(.custom("SofiaPro", size: 11))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Show a code the receivers can use, instead of pasting URLs by hand")
+                    .popover(isPresented: $showLink, arrowEdge: .bottom) { linkPopover }
                     if let hint = pasteHint {
                         Text(hint)
                             .font(.custom("SofiaPro", size: 10))
@@ -350,6 +366,100 @@ struct StreamConfigCard: View {
                 await manager.refreshAVDevices()
             }
             Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private var linkPopover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Link receivers")
+                .font(.custom("SofiaPro-SemiBold", size: 13))
+
+            if let session = linkSession {
+                Text("Type this code into each Turbo Receiver:")
+                    .font(.custom("SofiaPro", size: 11))
+                    .foregroundStyle(.secondary)
+                Text(session.code)
+                    .font(.system(size: 30, weight: .bold, design: .monospaced))
+                    .textSelection(.enabled)
+
+                Divider()
+
+                if linkReceivers.isEmpty {
+                    Text("Waiting for a receiver to join…")
+                        .font(.custom("SofiaPro", size: 11))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("\(linkReceivers.count) receiver\(linkReceivers.count == 1 ? "" : "s") joined")
+                        .font(.custom("SofiaPro", size: 11))
+                        .foregroundStyle(.secondary)
+                    ForEach(linkReceivers) { r in
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(r.label).font(.custom("SofiaPro-SemiBold", size: 12))
+                                Text("\(r.url) · key \(r.streamKey)")
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1).truncationMode(.middle)
+                            }
+                            Spacer(minLength: 4)
+                            Button("Use") {
+                                config.rtmpPreset   = .custom
+                                config.rtmpURL      = r.url
+                                config.streamKey    = r.streamKey
+                                config.srtLatencyMs = r.latencyMs
+                                showLink = false
+                            }
+                            .buttonStyle(.bordered).controlSize(.small)
+                        }
+                    }
+                    Text("With more than one receiver, use one per stream: add a stream and pick the next.")
+                        .font(.custom("SofiaPro", size: 10))
+                        .foregroundStyle(Color.white.opacity(0.4))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                Text("Creates a short code. Each receiver enters it and tells this app where to send the stream, so no URL is typed by hand. The video never goes through the server.")
+                    .font(.custom("SofiaPro", size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button(linkBusy ? "Creating…" : "Create code") { createLinkSession() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(linkBusy)
+            }
+
+            if let e = linkError {
+                Text(e).font(.custom("SofiaPro", size: 11)).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(16)
+        .frame(width: 400)
+        .onDisappear { linkPoll?.cancel(); linkPoll = nil }
+    }
+
+    private func createLinkSession() {
+        linkBusy = true; linkError = nil
+        Task {
+            do {
+                let s = try await LinkClient.createSession(name: config.name)
+                linkSession = s
+                startLinkPolling(s)
+            } catch {
+                linkError = error.localizedDescription
+            }
+            linkBusy = false
+        }
+    }
+
+    private func startLinkPolling(_ s: LinkClient.Session) {
+        linkPoll?.cancel()
+        linkPoll = Task {
+            while !Task.isCancelled {
+                do { linkReceivers = try await LinkClient.receivers(code: s.code, secret: s.secret) }
+                catch { linkError = error.localizedDescription }
+                try? await Task.sleep(for: .seconds(3))
+            }
         }
     }
 
