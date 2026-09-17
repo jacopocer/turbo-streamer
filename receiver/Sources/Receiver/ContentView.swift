@@ -122,6 +122,7 @@ struct ContentView: View {
             }
 
             urlRow("Publish here (Turbo Streamer)", server.ingestURL(key))
+            urlRow("Publish low-latency (SRT)",      server.srtURL(key))
             urlRow("OBS · Turbo Streamer (RTSP)",   server.rtspURL(key))
             urlRow("TV · browser (HLS)",            server.hlsURL(key))
         }

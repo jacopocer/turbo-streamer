@@ -73,6 +73,7 @@ open Streamer.app               # run
 - **Drop/recover webhook alerts** (opt-in, off by default): a global "Alerts" webhook URL (Configure-header popover, persisted in `UserDefaults`). On a real drop (a healthy stream — ran > `healthyRunSeconds` — going down) and the paired recover, the app fires a fire-and-forget JSON POST `{app, event, stream, message, time}` (`sendWebhookAlert` → `Task.detached`, errors swallowed — never blocks or affects the stream). Pairing is centralized in `streamDropped`/`streamRecovered` over a `droppedStreams` set; "Send test" reports the HTTP outcome. Point the URL at Zapier/Make/Slack/Telegram to reach WhatsApp/email/SMS.
 
 - **Live mute/unmute** per stream: the audio chain always carries a `volume` filter, and the toggle sends ffmpeg a runtime filter command on **stdin** (`cvolume -1 volume 0`). Nothing restarts, the video is untouched. `runFFmpeg` keeps stdin as a `Pipe` per stream; SIGPIPE is ignored so writing to a dead ffmpeg can't kill the app. `mutedStreams` seeds the filter's initial value, so a reconnect comes back muted.
+- **SRT output** for the low-latency WAN hop: if the destination URL starts with `srt://`, buildArgs switches to MPEG-TS and passes `-srt_streamid publish:<key>` plus a configurable `srtLatencyMs` (default 120). SRT absorbs packet loss with retransmission inside that budget instead of stalling like TCP/RTMP. tee is disabled on SRT (per-target streamid can't be expressed), so backup RTMP and safety recording are skipped on that path.
 - **Network input** (`InputType.network` + `networkURL`): consume a live RTSP/RTMP/SRT/HTTP source — typically a feed served by Turbo Receiver — and restream it. No `-re`/`-stream_loop` (a live source paces itself); RTSP is forced over TCP.
 
 ## Turbo Receiver (second app, `receiver/`)
@@ -88,6 +89,8 @@ Separate SwiftPM package, same orchestrator model: a thin SwiftUI shell around a
 ## Known bugs / gotchas (do not rediscover these)
 
 - The Homebrew ffmpeg on this machine is **broken** (missing `libass`) and `brew install` fails outright because the `homebrew-ffmpeg` tap is untrusted. Both `build.sh` scripts therefore pick an ffmpeg by **testing that it actually runs**, not that the file exists, and fall back to the copy already bundled in `Streamer.app`. Do not "simplify" that back to an existence check.
+- MediaMTX binds listeners **IPv6-only** when the address is written as `:port`. An IPv4 client then never reaches it and MediaMTX logs nothing at all, because the packets never arrive — this cost real debugging time on SRT. The receiver now writes every listener as `0.0.0.0:port`.
+- ffmpeg **ignores `streamid` in an SRT query string**. It must be passed as the dedicated option: `-srt_streamid publish:<path>`. The path travels in the streamid, not in the URL.
 - MediaMTX HLS defaults to `hlsVariant: lowLatency`, which sits behind a `cookieCheck` redirect that returns **404** to ffmpeg and VLC. The receiver generates `hlsVariant: mpegts` + `hlsAlwaysRemux` so ordinary players and TVs work.
 - NDI needs **NDI Tools installed** (`/usr/local/lib/libndi.dylib`); `ndi-sender` links it via rpath. NDI output can only be switched on while a feed is actually live, because ffprobe reads the format from the running source.
 

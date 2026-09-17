@@ -1384,7 +1384,21 @@ final class StreamManager: ObservableObject {
         // Simplest proven path (single dest, no snapshot) → plain -vf + flv.
         // Otherwise → filter_complex so we can fan out: tee (backup/recording)
         // and/or a 1 fps snapshot branch (most-recent-frame fallback).
-        let useTee = !backup.isEmpty || recordingURL != nil
+        // SRT destination: the path travels in the SRT streamid, not in the URL, and
+        // ffmpeg ignores it in the query string — it needs the dedicated option.
+        // MPEG-TS is the container; tee is not used because per-target streamid
+        // cannot be expressed, so backup/recording are skipped on SRT.
+        let isSRT = config.rtmpURL.lowercased().hasPrefix("srt://")
+        func primaryOutput() -> [String] {
+            guard isSRT else { return ["-f", "flv", dest] }
+            return ["-f", "mpegts",
+                    "-srt_streamid", "publish:\(config.streamKey)",
+                    "-pkt_size", "1316",
+                    "-latency", "\(max(20, config.srtLatencyMs) * 1000)",
+                    config.rtmpURL]
+        }
+
+        let useTee = !isSRT && (!backup.isEmpty || recordingURL != nil)
         let snapshot = snapshotURL != nil
 
         if useTee || snapshot {
@@ -1407,7 +1421,7 @@ final class StreamManager: ObservableObject {
                 if let rec = recordingURL { targets.append("[f=mpegts:onfail=ignore]\(rec.path)") }
                 args += ["-f", "tee", targets.joined(separator: "|")]
             } else {
-                args += ["-f", "flv", dest]
+                args += primaryOutput()
             }
 
             // Snapshot output: overwrite one JPEG ~1×/sec with a recent frame.
@@ -1419,7 +1433,7 @@ final class StreamManager: ObservableObject {
             args += ["-vf", videoFilter, "-r", outFPS]
             args += encoderArgs()
             args += audioArgs
-            args += ["-f", "flv", dest]
+            args += primaryOutput()
         }
 
         return args
