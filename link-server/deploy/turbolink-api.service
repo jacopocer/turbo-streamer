@@ -1,0 +1,24 @@
+[Unit]
+Description=Turbolink rendezvous API
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/turbolink/api
+ExecStart=/usr/bin/env node index.js
+Environment=PORT=8791
+Environment=HOST=127.0.0.1
+Environment=TURBOLINK_DATA=/opt/turbolink/data
+Environment=NODE_ENV=production
+Restart=on-failure
+RestartSec=5
+
+ProtectSystem=strict
+ReadWritePaths=/opt/turbolink/data
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
