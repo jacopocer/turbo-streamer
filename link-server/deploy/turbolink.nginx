@@ -1,15 +1,15 @@
 server {
     listen 80;
-    server_name turbo.indigital.tv;
+    server_name turbostreamer.indigital.tv;
     location / { return 301 https://$host$request_uri; }
 }
 
 server {
     listen 443 ssl http2;
-    server_name turbo.indigital.tv;
+    server_name turbostreamer.indigital.tv;
 
-    ssl_certificate     /etc/letsencrypt/live/turbo.indigital.tv/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/turbo.indigital.tv/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/turbostreamer.indigital.tv/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/turbostreamer.indigital.tv/privkey.pem;
 
     # Pairing payloads are tiny; cap the body and rate-limit code guessing.
     client_max_body_size 32k;
