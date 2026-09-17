@@ -39,16 +39,16 @@ Repo: `github.com/jacopocer/turbo-streamer` (currently PUBLIC; owner is handling
 ```
 cd /Users/jacopocerati/streamer
 swift build -c release          # quick compile check
-bash build.sh                   # compile + package Streamer.app (arm64) + bundle ffmpeg/dylibs/fonts + ad-hoc codesign
-open Streamer.app               # run
+bash build.sh                   # compile + package "Turbo Streamer.app" (arm64) + bundle ffmpeg/dylibs/fonts + ad-hoc codesign
+open "Turbo Streamer.app"       # run
 ```
 
 - Universal (Intel + Apple Silicon): `bash build_universal.sh` (run from Terminal.app the first time; it installs x86_64 Homebrew + ffmpeg via Rosetta and asks for a password once).
 - **Relaunch clean** (kill the running instance + any orphan ffmpeg, then open fresh):
   ```
-  osascript -e 'tell application "Streamer" to quit'; pkill -x Streamer; sleep 1
+  osascript -e 'tell application "Turbo Streamer" to quit'; pkill -x Streamer; sleep 1
   pkill -9 -f "Resources/bin/ffmpeg"; sleep 1
-  open Streamer.app
+  open "Turbo Streamer.app"
   ```
 - The app prefers the bundled ffmpeg, else `/opt/homebrew/bin/ffmpeg`. `build.sh` bundles `/opt/homebrew/bin/ffmpeg`, which MUST be the special build with `--with-decklink --with-srt --with-zeromq` (and `--enable-libfreetype/fontconfig/harfbuzz` for `drawtext`).
 - To rebuild that ffmpeg (needed for DeckLink): download the Blackmagic Desktop Video SDK, copy its `Mac/include/*.h` and `*.cpp` to `/opt/homebrew/include`, patch `DeckLinkAPI.h` to define `IID_IUnknown` (SDK 12+ removed it), then:
@@ -60,13 +60,13 @@ open Streamer.app               # run
 ## What works
 
 - 1–8 simultaneous RTMP/RTMPS streams; inputs: file loop, capture card (AVFoundation), Blackmagic DeckLink.
-- Auto encoder: libx264 (`veryfast`, `zerolatency`, `sc_threshold 0`) for ≤1080p; `h264_videotoolbox` (realtime, low-latency) for 4K. No user toggle.
+- Encoder: per-stream `videoCodec` (Auto / h264_videotoolbox / libx264 / hevc_videotoolbox), resolved in `resolveCodec`. Auto = libx264 (`veryfast`, `zerolatency`, `sc_threshold 0`) for ≤1080p; `h264_videotoolbox` for 4K ≤30 fps; at 4K >30 fps `hevc_videotoolbox` when the destination is SRT (Turbo Receiver) else libx264. Reason: measured on an M2 Pro, synthetic 4K60 → h264_videotoolbox 0.88× real-time (drops), hevc_videotoolbox 1.31×, libx264 veryfast 1.54×. The chosen encoder is logged at launch.
 - Per-resolution auto bitrate; settings persist across launches (resilient decode).
 - Failsafe suite (mostly opt-in, off by default): reconnect+backoff, hang watchdog, freeze/black detection, backup RTMP (`tee`), safety recording (`.ts`), recent-frame fallback (snapshot → slate), adaptive bitrate, pre-flight reachability, idle-sleep power assertion, lid-sleep warning, audible alerts (disconnect/recover/freeze).
 - Text overlay: `drawtext` with font (bundled Sofia Pro / Bello Pro, or upload `.otf/.ttf`), size, colour, position, multi-line, background box. Text updates **live** on-air (textfile + `reload=1`); other style changes apply on **Refresh**.
 - Live, pinned, resizable preview (`Preview Streams`) of the composed output, with a **Refresh Preview** button; full-screen via the green button.
 - Wobbling health icon; child ffmpeg killed on app quit (no orphans).
-- **FPS "Match source"** (per-stream `fpsMatchSource` flag): encode at the source's native rate instead of a typed value. Capture probes the device's highest native mode (`probeCaptureFramerate(preferMax:)`); file parses the rate from `ffmpeg -i` (`probeFileFramerate`). The rate is resolved ONCE at pre-flight, cached in `captureFramerate[id]`, and threaded through `buildArgs`/`buildSlateArgs` as a numeric `outputFPS`; the encode path stays CFR. `config.fps` is ALWAYS numeric (the fallback). DeckLink is intentionally excluded (the UI hides the toggle) until it can be tested on hardware.
+- **FPS "Match source"** (per-stream `fpsMatchSource` flag): encode at the source's native rate instead of a typed value. Capture probes the device's highest native mode (`probeCaptureFramerate(preferMax:)`); file parses the rate from `ffmpeg -i` (`probeFileFramerate`). The rate is resolved ONCE at pre-flight, cached in `captureFramerate[id]`, and threaded through `buildArgs`/`buildSlateArgs` as a numeric `outputFPS`; the encode path stays CFR. `config.fps` is ALWAYS numeric (the fallback). DeckLink: available once `deckLinkFormat` is explicit (the rate comes from the format table in `DeckLinkFormat.fps`); with Auto-detect the toggle is hidden because the rate is unknown before the card reports it.
 - **Paste-a-URL splitter**: a "Paste full URL" button in each Destination section reads the clipboard, splits a combined `rtmp(s)://host/app/streamkey` into URL + key via `StreamConfig.splitRTMPURL`, and flips the preset to Custom. The splitter refuses to mis-split a keyless URL or a non-rtmp string (unit-checked, 9 cases).
 - **Named profiles**: the "Profiles" menu in the Configure header saves/loads/deletes named snapshots of all stream configs (`Profile` in Models, persisted in `UserDefaults` under `profilesKey`). Loading swaps the editable configs only — running streams (which hold their own snapshots) are untouched.
 - **Plain-language diagnostics**: a `Diagnostic` catalog (`Models.swift`) translates known ffmpeg/app failure signatures into a friendly "What's happening" callout atop each Live card (`StreamStatusCard.diagnosticPanel`) — title + what-it-means + a fix tip — while the raw technical log stays untouched below. Matching runs in `StreamStatus.appendLog` (first match per batch; cleared when a progress line shows frames resuming). Copy is themed in a **Topolino & Pippo** voice (owner's pick); the catalog and the freeze/black badge text (`StreamStatus.frozenBadge`/`blackBadge`) are plain data — re-theme by editing strings, the `match:` arrays (the real triggers) stay. Deliberately a focused ~12-entry set (connection / input / device / disk / engine) to avoid false alarms on benign log noise.
@@ -89,7 +89,9 @@ Separate SwiftPM package, same orchestrator model: a thin SwiftUI shell around a
 - `fetch-mediamtx.sh` pulls the binary into `vendor/` (gitignored); `build-ndi.sh` compiles the NDI tools against the SDK headers (`NDI_SDK_DIR`, or the DistroAV checkout).
 ## Known bugs / gotchas (do not rediscover these)
 
-- The Homebrew ffmpeg on this machine is **broken** (missing `libass`) and `brew install` fails outright because the `homebrew-ffmpeg` tap is untrusted. Both `build.sh` scripts therefore pick an ffmpeg by **testing that it actually runs**, not that the file exists, and fall back to the copy already bundled in `Streamer.app`. Do not "simplify" that back to an existence check.
+- `build.sh` bundles only an ffmpeg that **runs and is fit** (arm64, `--enable-libsrt`, `--enable-decklink`) and otherwise stops; the bundle it is rebuilding is never a source. This exists because a rebuild once fell through to a stale x86_64 `./bin/ffmpeg` without SRT or DeckLink and the app kept building. Homebrew's ffmpeg needs the `homebrew-ffmpeg/ffmpeg` tap trusted (`brew trust`) for its dependencies to install. `receiver/build.sh` copies the set from `Turbo Streamer.app`. Do not "simplify" any of this back to an existence check.
+- **DeckLink input options** (`deckLinkInputOptions`): `-format_code` only when not Auto, `-video_input` only when not "Card default", `-raw_format uyvy422` or `yuv422p10`. ffmpeg accepts them (verified: fails only at device open without a card). **Not yet run against a physical card** — 2160p60 capture is the expected use; verify on hardware first.
+- **10-bit chain order**: with `deckLinkTenBit` + HEVC the `format=p010le` conversion goes LAST (after freeze/black detectors and drawtext). Placed first, ffmpeg auto-inserts p010le→yuv420p10le→p010le around the detectors: 1.09× vs 1.36× at 4K60.
 - MediaMTX binds listeners **IPv6-only** when the address is written as `:port`. An IPv4 client then never reaches it and MediaMTX logs nothing at all, because the packets never arrive — this cost real debugging time on SRT. The receiver now writes every listener as `0.0.0.0:port`.
 - ffmpeg **ignores `streamid` in an SRT query string**. It must be passed as the dedicated option: `-srt_streamid publish:<path>`. The path travels in the streamid, not in the URL.
 - MediaMTX HLS defaults to `hlsVariant: lowLatency`, which sits behind a `cookieCheck` redirect that returns **404** to ffmpeg and VLC. The receiver generates `hlsVariant: mpegts` + `hlsAlwaysRemux` so ordinary players and TVs work.
@@ -106,7 +108,7 @@ Separate SwiftPM package, same orchestrator model: a thin SwiftUI shell around a
 
 - Owner is KEEPING the verbose preview debug logging ON (used for testing) — do not trim without asking.
 - **DONE — drop/recover webhook alerts shipped** (see What works). Future idea: optional native Telegram/Slack/Discord presets so users skip the Zapier/Make bridge.
-- **DeckLink "Match source"** — extend the new FPS match-source feature to DeckLink (detect the SDI/HDMI signal's rate). Deferred: needs the physical DeckLink to test; don't ship untested capture code.
+- **DeckLink "Match source" with Auto-detect** — works only with an explicit Format today. Parsing the detected mode from ffmpeg's log (`Found Decklink mode W x H with rate R`) at pre-flight would remove that limit; needs the physical card to verify the log line.
 - `-pixel_format` on AVFoundation input — **decided against**: the yuv420p warning is harmless, the filter chain forces yuv420p downstream anyway, and a safe version needs a per-device probe for near-zero benefit.
 - Distribution: Developer ID + notarization if it ships beyond the owner's machines.
 
@@ -118,7 +120,7 @@ Separate SwiftPM package, same orchestrator model: a thin SwiftUI shell around a
 ## Durable decisions (do not relitigate)
 
 - App orchestrates; ffmpeg does the work in subprocesses. Crash isolation is the whole point.
-- Encoder is auto-selected; no user toggle.
+- Encoder defaults to Auto; the per-stream Codec picker overrides it.
 - Recording is `.ts` (survives an abrupt kill).
 - Failsafe features are opt-in and off by default; the default path stays dead simple.
 - The owner wants a RELIABLE, SIMPLE streamer, not OBS. Push back on features that add crash surface. When in doubt, stop and ask.

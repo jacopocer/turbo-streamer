@@ -1,6 +1,6 @@
 #!/bin/bash
 # ─────────────────────────────────────────────────────────────────────────────
-# build_universal.sh — Build a universal (arm64 + x86_64) Streamer.app bundle
+# build_universal.sh — Build a universal (arm64 + x86_64) "Turbo Streamer.app" bundle
 #
 # IMPORTANT: Run this from Terminal.app (not from an IDE or Claude Code).
 # The first run installs x86_64 Homebrew + ffmpeg and will ask for your
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 APP_NAME="Streamer"
-BUNDLE="${APP_NAME}.app"
+BUNDLE="Turbo Streamer.app"   # the executable inside stays "Streamer"
 ENTITLEMENTS="Streamer.entitlements"
 BIN_DST="$BUNDLE/Contents/Resources/bin"
 LIB_DST="$BIN_DST/lib"
@@ -119,4 +119,4 @@ codesign --force --deep --sign - --entitlements "$ENTITLEMENTS" "$BUNDLE"
 echo ""
 echo "✅  Done!  →  ./${BUNDLE}"
 echo "    ffmpeg architectures: $(lipo -archs "$BIN_DST/ffmpeg")"
-echo "Run with:   open ${BUNDLE}"
+echo "Run with:   open \"${BUNDLE}\""

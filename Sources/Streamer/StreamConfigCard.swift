@@ -210,6 +210,15 @@ struct StreamConfigCard: View {
                     }
                 }
 
+                labeled("Codec") {
+                    Picker("", selection: $config.videoCodec) {
+                        ForEach(VideoCodec.allCases) { c in Text(c.label).tag(c) }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 220)
+                    .help("Auto: x264 up to 1080p; hardware H.264 at 4K up to 30 fps; at 4K above 30 fps, HEVC to Turbo Receiver (SRT) or x264 to platforms. Most platforms don't accept HEVC — pick it only for Turbo Receiver or YouTube.")
+                }
+
                 HStack(spacing: 12) {
                     labeled("Video Bitrate") {
                         TextField("5872k", text: $config.videoBitrate)
@@ -223,7 +232,7 @@ struct StreamConfigCard: View {
                             .disabled(config.fpsMatchSource)
                             .opacity(config.fpsMatchSource ? 0.45 : 1)
                     }
-                    if config.inputType != .decklink {
+                    if config.inputType != .decklink || config.deckLinkFormat != .auto {
                         Toggle("Match source", isOn: $config.fpsMatchSource)
                             .toggleStyle(.checkbox)
                             .help("Encode at the source's native frame rate (falls back to the value on the left if it can't be detected)")
@@ -248,8 +257,8 @@ struct StreamConfigCard: View {
                 }
                 .pickerStyle(.segmented)
                 .onChange(of: config.inputType) { newType in
-                    // "Match source" isn't wired for DeckLink yet — clear it on switch.
-                    if newType == .decklink { config.fpsMatchSource = false }
+                    // DeckLink can only match the source when its format is explicit.
+                    if newType == .decklink && config.deckLinkFormat == .auto { config.fpsMatchSource = false }
                 }
 
                 if config.inputType == .file {
@@ -324,11 +333,37 @@ struct StreamConfigCard: View {
                 }
             }
 
+            HStack(spacing: 12) {
+                labeled("Format") {
+                    Picker("", selection: $config.deckLinkFormat) {
+                        ForEach(DeckLinkFormat.allCases) { f in Text(f.label).tag(f) }
+                    }
+                    .labelsHidden()
+                    .frame(width: 140)
+                    .onChange(of: config.deckLinkFormat) { f in
+                        if f == .auto { config.fpsMatchSource = false }
+                    }
+                }
+                labeled("Connector") {
+                    Picker("", selection: $config.deckLinkConnector) {
+                        ForEach(DeckLinkConnector.allCases) { c in Text(c.label).tag(c) }
+                    }
+                    .labelsHidden()
+                    .frame(width: 130)
+                }
+                labeled("Depth") {
+                    Toggle("10-bit", isOn: $config.deckLinkTenBit)
+                        .toggleStyle(.checkbox)
+                        .help("Capture 10-bit 4:2:2. Kept through to the output only with the HEVC hardware encoder (main10); other encoders convert to 8-bit.")
+                }
+                Spacer()
+            }
+
             HStack(spacing: 4) {
                 Image(systemName: "info.circle")
                     .font(.system(size: 10))
                     .foregroundStyle(Color.white.opacity(0.25))
-                Text("Audio is captured automatically with the selected device.")
+                Text("Audio is captured automatically with the selected device. Auto-detect needs a card with input format detection; pick the exact format if no picture arrives, or to use Match source.")
                     .font(.custom("SofiaPro", size: 10))
                     .foregroundStyle(Color.white.opacity(0.3))
             }

@@ -5,7 +5,7 @@
 set -euo pipefail
 
 APP_NAME="Streamer"
-BUNDLE="${APP_NAME}.app"
+BUNDLE="Turbo Streamer.app"   # the executable inside stays "Streamer"
 ENTITLEMENTS="Streamer.entitlements"
 BUILD_DIR=".build/release"
 
@@ -156,4 +156,4 @@ codesign --force --deep --sign - --entitlements "$ENTITLEMENTS" "$BUNDLE"
 ARCH=$(file "$BIN_DST/ffmpeg" 2>/dev/null | grep -o 'arm64\|x86_64' || echo 'unknown')
 echo ""
 echo "✅  Done!  →  ./${BUNDLE}  (ffmpeg: ${ARCH})"
-echo "Run with:   open ${BUNDLE}"
+echo "Run with:   open \"${BUNDLE}\""

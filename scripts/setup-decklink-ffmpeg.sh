@@ -22,7 +22,7 @@
 # USAGE
 #   bash scripts/setup-decklink-ffmpeg.sh "/path/to/Blackmagic DeckLink SDK XX.Y/Mac/include"
 #
-# After it finishes, run ./build.sh to rebuild Streamer.app with DeckLink support.
+# After it finishes, run ./build.sh to rebuild "Turbo Streamer.app" with DeckLink support.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -76,4 +76,4 @@ echo ""
 echo "✅  ffmpeg now has DeckLink support:"
 "$(brew --prefix)/bin/ffmpeg" -hide_banner -devices 2>&1 | grep -i decklink || true
 echo ""
-echo "Next:  bash build.sh    # bundles this ffmpeg into Streamer.app"
+echo "Next:  bash build.sh    # bundles this ffmpeg into "Turbo Streamer.app""

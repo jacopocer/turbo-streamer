@@ -14,7 +14,7 @@ Multiple AI chat sessions edit this repo at the same time. **Read this file befo
 ## LOG (newest first)
 
 ### 🔄 IN PROGRESS
-_(none)_
+- `comet-1` — DeckLink format/connector/10-bit controls + codec picker (4K60 real-time), rename bundle to `Turbo Streamer.app`. Files: `Models.swift`, `StreamManager.swift`, `StreamConfigCard.swift`, `build.sh`, `build_universal.sh`, `receiver/build.sh`, `README.md`, `HANDOFF.md`, `scripts/setup-decklink-ffmpeg.sh`. ETA: this session.
 
 ### ✅ DONE (not yet folded into HANDOFF.md)
 - `comet-1` — **Turbo Receiver** (new app, `receiver/`): MediaMTX ingest + RTSP/RTMP/HLS fan-out, NDI output for BirdDog decoders, HLS served as mpegts for TVs. Commits `7970ba3`, `43ada29`, `a641cc9`. Folded into HANDOFF.
