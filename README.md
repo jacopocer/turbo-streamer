@@ -14,9 +14,9 @@ A native macOS SwiftUI shell that orchestrates **bundled ffmpeg** subprocesses. 
 |---|---|---|
 | Multi-stream | ✅ | 1–8 simultaneous RTMP streams |
 | UI | ✅ | Two tabs — **Configure** (build streams while others run) + **Live** (monitor) |
-| Inputs | ✅ | File loop · Capture card (AVFoundation) · **Blackmagic DeckLink** |
+| Inputs | ✅ | File loop · Capture card (AVFoundation) · **Blackmagic DeckLink** (auto-detect or explicit 720/1080/2160 format, SDI/HDMI connector, 8/10-bit) · Network |
 | Destinations | ✅ | Mux / YouTube / Vimeo presets + Custom; RTMP **and RTMPS**; paste a full URL to auto-split into URL + key |
-| Encoder | ✅ | **Auto** — libx264 (≤1080p) / VideoToolbox (4K). No toggle to get wrong |
+| Encoder | ✅ | **Auto** — x264 (≤1080p), hardware H.264 (4K ≤30 fps), hardware HEVC (4K above 30 fps to Turbo Receiver) — or pick one per stream |
 | Bitrate | ✅ | Auto-fills per resolution (1080p 5872k, 4K 16000k) |
 | Frame rate | ✅ | Per-stream; **Match source** encodes at the camera/file's native rate |
 | Settings | ✅ | Persist across launches; resilient decode (updates won't wipe them); **save/load named profiles** |
@@ -81,9 +81,9 @@ It was built specifically for live event production where you need to:
 - **Two tabs** — Configure streams while others are already live; Live tab shows all active streams
 - **File loop** — streams a video file end-to-end on repeat (`-stream_loop -1`)
 - **Capture card** — reads from any AVFoundation video/audio device, picked from a live dropdown
-- **Blackmagic / DeckLink** — captures from DeckLink / UltraStudio devices (requires a DeckLink-enabled ffmpeg — see setup)
+- **Blackmagic / DeckLink** — captures from DeckLink / UltraStudio devices (requires a DeckLink-enabled ffmpeg — see setup). **Format**: Auto-detect, or an explicit mode (1080p/1080i/720p/2160p at every standard rate) which also enables **Match source**; **Connector**: card default / SDI / HDMI / optical / component / composite; **10-bit** capture, kept through to the output with the HEVC hardware encoder (main10)
 - **Device dropdowns** — pick video/audio sources from auto-scanned lists; refresh button re-scans
-- **Automatic encoder** — no toggle to get wrong: 1080p/vertical use libx264 (`veryfast`, `zerolatency`); 4K uses Apple's VideoToolbox hardware encoder (the only one fast enough at 2160p)
+- **Encoder** — Auto, or per stream: H.264 hardware (VideoToolbox), H.264 x264 (software), HEVC hardware. Auto: x264 for ≤1080p; hardware H.264 at 4K up to 30 fps; at 4K above 30 fps, HEVC to Turbo Receiver (SRT) or x264 to platforms. Measured on an M2 Pro with a synthetic 4K60 source: hardware H.264 0.88× (cannot keep up), hardware HEVC 1.31×, x264 veryfast 1.54×. Most platforms ingest H.264 only; YouTube also takes HEVC
 - **Hardware decoding** — `-hwaccel videotoolbox` for ProRes and other heavy sources
 - **Failsafe suite** — designed to survive real-world failures:
   - **Auto-reconnect** with exponential backoff (1→2→4→8→15s), resets after a healthy run
@@ -164,7 +164,7 @@ brew install ffmpeg
 
 ```bash
 bash build.sh
-open Streamer.app
+open "Turbo Streamer.app"
 ```
 
 **Universal build (Apple Silicon + Intel):**
@@ -217,7 +217,7 @@ bash build.sh      # or build_universal.sh
 Verify it worked:
 
 ```bash
-./Streamer.app/Contents/Resources/bin/ffmpeg -hide_banner -sources decklink
+"./Turbo Streamer.app/Contents/Resources/bin/ffmpeg" -hide_banner -sources decklink
 ```
 
 You should see your device listed. In the app, choose **Blackmagic** as the input,
@@ -227,9 +227,10 @@ hit the refresh button, and pick the device from the dropdown.
 
 ## Usage
 
-1. Open `Streamer.app`
+1. Open `Turbo Streamer.app`
 2. In the **Configure** tab, set your stream name, RTMP platform and key, resolution, bitrate, and input source
    - For **Capture Card** or **Blackmagic**, pick the device from the dropdown; use the ↻ refresh button to re-scan if you plug something in
+   - For **Blackmagic**, leave Format on Auto-detect unless no picture arrives or you want Match source — then pick the exact signal (e.g. 2160p60) and, if needed, the connector
 3. Press **Start Streams** — streams appear in the **Live** tab
 4. Go back to Configure any time to set up additional streams while the current ones are running
 5. Use the **Stop** button per stream, or **Stop All** to kill everything

@@ -31,11 +31,11 @@ chmod +x "$BUNDLE/Contents/Resources/bin/mediamtx"
 echo "✅  Bundled mediamtx"
 
 # ── ffmpeg/ffprobe (needed only for the NDI bridge) ─────────────────────────
-# Reuse the working build already bundled in Streamer.app; fall back to Homebrew.
+# Reuse the fit build already bundled in Turbo Streamer.app; fall back to Homebrew.
 BIN_DST="$BUNDLE/Contents/Resources/bin"
 SRC_BIN=""
-for c in "../Streamer.app/Contents/Resources/bin" \
-         "$HOME/streamer/Streamer.app/Contents/Resources/bin" \
+for c in "../Turbo Streamer.app/Contents/Resources/bin" \
+         "$HOME/streamer/Turbo Streamer.app/Contents/Resources/bin" \
          "/opt/homebrew/bin"; do
     # Must exist AND actually run — the Homebrew ffmpeg on this machine is
     # broken (missing libass), so a plain -x test is not enough.

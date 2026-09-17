@@ -556,6 +556,16 @@ final class StreamManager: ObservableObject {
                 let r = await probeFileFramerate(path: record.config.filePath)
                 captureFramerate[id] = r ?? record.config.fps
                 appendLog("✓ Matching source frame rate: \(r ?? record.config.fps) fps (from file).", to: id)
+            } else if record.config.inputType == .decklink {
+                let f = record.config.deckLinkFormat
+                var line = f == .auto ? "✓ DeckLink: auto-detecting the input format" : "✓ DeckLink input format \(f.label)"
+                if record.config.deckLinkConnector != .auto { line += " on \(record.config.deckLinkConnector.label)" }
+                line += record.config.deckLinkTenBit ? ", 10-bit" : ", 8-bit"
+                if record.config.fpsMatchSource {
+                    line += f.fps.map { " — matching source at \($0) fps" }
+                        ?? " — Match source needs an explicit Format, encoding at \(record.config.fps) fps"
+                }
+                appendLog(line + ".", to: id)
             }
 
             // ── Pre-flight: is the destination reachable? (non-blocking, informational) ──
@@ -758,6 +768,10 @@ final class StreamManager: ObservableObject {
         }
 
         let outputFPS = resolvedOutputFPS(for: config, captureFPS: captureFramerate[id])
+        let codec = resolveCodec(for: config,
+                                 fps: Int((Double(outputFPS) ?? 30).rounded()),
+                                 isSRT: config.rtmpURL.lowercased().hasPrefix("srt://"))
+        appendLog("✓ Encoder: \(codec.label) · \(config.resolution.rawValue) · \(outputFPS) fps · \(bitrate).", to: id)
         let args = buildArgs(for: config, recordingURL: recordingURL,
                              bitrateOverride: bitrate, snapshotURL: snapURL,
                              overlayTextURL: overlayURL, captureFPS: captureFramerate[id],
@@ -885,7 +899,7 @@ final class StreamManager: ObservableObject {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ffmpegPath)
-        let slateFPS = record.config.fpsMatchSource ? (captureFramerate[record.id] ?? record.config.fps) : record.config.fps
+        let slateFPS = resolvedOutputFPS(for: record.config, captureFPS: captureFramerate[record.id])
         process.arguments     = buildSlateArgs(for: record.config, bitrate: bitrate, sourcePath: source, outputFPS: slateFPS)
         process.standardInput = FileHandle.nullDevice
 
@@ -1253,7 +1267,7 @@ final class StreamManager: ObservableObject {
         case .file where !config.filePath.isEmpty:
             a += ["-re", "-stream_loop", "-1", "-i", config.filePath]
         case .decklink where !config.deckLinkDeviceName.isEmpty:
-            a += ["-f", "decklink", "-i", config.deckLinkDeviceName]
+            a += deckLinkInputOptions(for: config) + ["-i", config.deckLinkDeviceName]
         case .capture:
             a += ["-f", "avfoundation", "-framerate", captureFPS, "-i", "\(config.videoDeviceIndex):none"]
         case .network where !config.networkURL.isEmpty:
@@ -1291,7 +1305,32 @@ final class StreamManager: ObservableObject {
     /// device rate; file: parsed from the media). Falls back to the user's `fps` value.
     private func resolvedOutputFPS(for config: StreamConfig, captureFPS: String?) -> String {
         guard config.fpsMatchSource else { return config.fps }
+        // DeckLink: the rate is known only when a format is chosen explicitly.
+        if config.inputType == .decklink { return config.deckLinkFormat.fps ?? config.fps }
         return captureFPS ?? config.fps
+    }
+
+    /// The concrete encoder for a stream. Auto follows what was measured on an M2 Pro with a
+    /// synthetic 4K60 source: h264_videotoolbox 0.88× (cannot keep up), hevc_videotoolbox
+    /// 1.31×, libx264 veryfast 1.54×; at 4K30 h264_videotoolbox 1.54×. So Auto keeps the
+    /// proven picks (x264 ≤1080p, hardware H.264 at 4K ≤30 fps) and, above 30 fps at 4K,
+    /// goes HEVC to Turbo Receiver (SRT) or x264 to platforms, which mostly reject HEVC.
+    func resolveCodec(for config: StreamConfig, fps: Int, isSRT: Bool) -> VideoCodec {
+        guard config.videoCodec == .auto else { return config.videoCodec }
+        guard config.resolution == .uhd else { return .h264Software }
+        if fps <= 30 { return .h264Hardware }
+        return isSRT ? .hevcHardware : .h264Software
+    }
+
+    /// `-f decklink` plus the card options. Without -format_code the card auto-detects the
+    /// signal; an explicit code forces a mode. 8-bit UYVY is what the encoders want; 10-bit
+    /// (yuv422p10) only pays off with HEVC main10 — see encoderArgs.
+    private func deckLinkInputOptions(for config: StreamConfig) -> [String] {
+        var o = ["-f", "decklink"]
+        if config.deckLinkFormat != .auto    { o += ["-format_code", config.deckLinkFormat.rawValue] }
+        if config.deckLinkConnector != .auto { o += ["-video_input", config.deckLinkConnector.rawValue] }
+        o += ["-raw_format", config.deckLinkTenBit ? "yuv422p10" : "uyvy422"]
+        return o
     }
 
     private func buildArgs(for config: StreamConfig, recordingURL: URL?, bitrateOverride: String? = nil, snapshotURL: URL? = nil, overlayTextURL: URL? = nil, captureFPS: String? = nil, outputFPS: String? = nil, muted: Bool = false) -> [String] {
@@ -1299,7 +1338,8 @@ final class StreamManager: ObservableObject {
         let bitrateNum = Int(videoBitrate.replacingOccurrences(of: "k", with: "")) ?? 4500
         let bufsize    = "\(bitrateNum * 2)k"
         let outFPS     = outputFPS ?? config.fps
-        let fpsInt     = Int(outFPS) ?? 30
+        let fpsInt     = Int((Double(outFPS) ?? 30).rounded())
+        let isSRT      = config.rtmpURL.lowercased().hasPrefix("srt://")
         let dest       = "\(config.rtmpURL)/\(config.streamKey)"
         let backup     = config.backupRTMPURL.trimmingCharacters(in: .whitespaces)
 
@@ -1314,12 +1354,9 @@ final class StreamManager: ObservableObject {
                 "-i", config.filePath
             ]
         } else if config.inputType == .decklink {
-            args = [
-                "-hide_banner", "-loglevel", "info",
-                "-f", "decklink",
-                "-thread_queue_size", "1024",
-                "-i", config.deckLinkDeviceName
-            ]
+            args = ["-hide_banner", "-loglevel", "info"]
+                + deckLinkInputOptions(for: config)
+                + ["-thread_queue_size", "1024", "-i", config.deckLinkDeviceName]
         } else if config.inputType == .network {
             // Live network source (e.g. Turbo Receiver): no -re and no -stream_loop —
             // the sender already paces it. RTSP over TCP is far more reliable than the
@@ -1347,33 +1384,45 @@ final class StreamManager: ObservableObject {
         // reconnect finds the previous snapshot and ffmpeg refuses to open the output.
         args.insert("-y", at: 1)
 
-        // ── Video filter: scale + content detectors (freeze / black) + overlay ──
-        let detectors   = "freezedetect=n=-60dB:d=3,blackdetect=d=3"
-        var videoFilter = "\(config.resolution.scaleFilter),\(detectors)"
-        if let textURL = overlayTextURL,
-           let dt = drawtextFilter(for: config.overlay, textPath: textURL.path) {
-            videoFilter += ",\(dt)"   // text overlay drawn last, on top of everything
-        }
-
-        // ── Encoder (auto-selected by resolution) ───────────────────────────
+        // ── Encoder ────────────────────────────────────────────────────────
+        // 10-bit survives only into HEVC main10; every other encoder gets 8-bit yuv420p.
+        let codec  = resolveCodec(for: config, fps: fpsInt, isSRT: isSRT)
+        let tenBit = codec == .hevcHardware && config.inputType == .decklink && config.deckLinkTenBit
         func encoderArgs() -> [String] {
-            if config.resolution == .uhd {
+            let gop = "\(fpsInt * 2)"   // keyframe every 2 s (platform ABR expects it)
+            switch codec {
+            case .h264Hardware, .auto:
                 return [
                     "-c:v", "h264_videotoolbox", "-profile:v", "high",
-                    "-b:v", videoBitrate, "-g", "\(fpsInt * 2)",
+                    "-b:v", videoBitrate, "-g", gop,
                     "-realtime", "1", "-prio_speed", "1", "-bf", "0", "-allow_sw", "1"
                 ]
-            } else {
+            case .hevcHardware:
+                return [
+                    "-c:v", "hevc_videotoolbox", "-profile:v", tenBit ? "main10" : "main",
+                    "-b:v", videoBitrate, "-g", gop,
+                    "-realtime", "1", "-prio_speed", "1", "-bf", "0", "-allow_sw", "1"
+                ]
+            case .h264Software:
                 return [
                     "-c:v", "libx264", "-preset", "veryfast",
                     "-profile:v", "high", "-pix_fmt", "yuv420p",
                     "-b:v", videoBitrate, "-maxrate", videoBitrate,
-                    "-bufsize", bufsize, "-g", "\(fpsInt * 2)",
-                    "-keyint_min", "\(fpsInt * 2)", "-sc_threshold", "0",  // regular keyframes on a 2s grid (platform ABR)
+                    "-bufsize", bufsize, "-g", gop,
+                    "-keyint_min", gop, "-sc_threshold", "0",
                     "-tune", "zerolatency"
                 ]
             }
         }
+
+        // ── Video filter: scale + content detectors (freeze / black) + overlay ──
+        let detectors   = "freezedetect=n=-60dB:d=3,blackdetect=d=3"
+        var videoFilter = "\(tenBit ? config.resolution.scaleOnly : config.resolution.scaleFilter),\(detectors)"
+        if let textURL = overlayTextURL,
+           let dt = drawtextFilter(for: config.overlay, textPath: textURL.path) {
+            videoFilter += ",\(dt)"   // text overlay drawn last, on top of everything
+        }
+        if tenBit { videoFilter += ",format=p010le" }   // conversion last — see ResolutionPreset.scaleOnly
         // The volume filter is ALWAYS in the chain so mute/unmute can be toggled live via a
         // runtime command on ffmpeg's stdin (no restart, no gap). Its initial value carries
         // the current mute state, so a reconnect comes back muted if it was muted.
@@ -1388,7 +1437,6 @@ final class StreamManager: ObservableObject {
         // ffmpeg ignores it in the query string — it needs the dedicated option.
         // MPEG-TS is the container; tee is not used because per-target streamid
         // cannot be expressed, so backup/recording are skipped on SRT.
-        let isSRT = config.rtmpURL.lowercased().hasPrefix("srt://")
         func primaryOutput() -> [String] {
             guard isSRT else { return ["-f", "flv", dest] }
             return ["-f", "mpegts",

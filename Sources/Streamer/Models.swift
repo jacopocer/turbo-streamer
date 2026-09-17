@@ -10,6 +10,75 @@ enum InputType: String, CaseIterable, Identifiable, Codable {
     var id: String { rawValue }
 }
 
+/// Blackmagic input format (`-format_code`). `auto` asks the card to detect the incoming
+/// signal, which every current DeckLink/UltraStudio supports. An explicit code is
+/// deterministic — use it when detection fails or to force a mode — and it also tells the
+/// app the source frame rate up front, which is what lets "Match source" follow it.
+enum DeckLinkFormat: String, CaseIterable, Identifiable, Codable {
+    case auto = "auto"
+    case hd1080p2398 = "23ps", hd1080p24 = "24ps", hd1080p25 = "Hp25", hd1080p2997 = "Hp29", hd1080p30 = "Hp30"
+    case hd1080p50 = "Hp50", hd1080p5994 = "Hp59", hd1080p60 = "Hp60"
+    case hd1080i50 = "Hi50", hd1080i5994 = "Hi59", hd1080i60 = "Hi60"
+    case hd720p50 = "hp50", hd720p5994 = "hp59", hd720p60 = "hp60"
+    case uhd2160p2398 = "4k23", uhd2160p24 = "4k24", uhd2160p25 = "4k25", uhd2160p2997 = "4k29", uhd2160p30 = "4k30"
+    case uhd2160p50 = "4k50", uhd2160p5994 = "4k59", uhd2160p60 = "4k60"
+
+    var id: String { rawValue }
+
+    /// (menu label, frame rate as the app's fps string). Interlaced modes list the frame
+    /// rate, i.e. half the field rate, which is what ffmpeg delivers.
+    private static let table: [DeckLinkFormat: (label: String, fps: String?)] = [
+        .auto:         ("Auto-detect", nil),
+        .hd1080p2398:  ("1080p23.98", "23.98"), .hd1080p24: ("1080p24", "24"),
+        .hd1080p25:    ("1080p25", "25"),       .hd1080p2997: ("1080p29.97", "29.97"), .hd1080p30: ("1080p30", "30"),
+        .hd1080p50:    ("1080p50", "50"),       .hd1080p5994: ("1080p59.94", "59.94"), .hd1080p60: ("1080p60", "60"),
+        .hd1080i50:    ("1080i50", "25"),       .hd1080i5994: ("1080i59.94", "29.97"), .hd1080i60: ("1080i60", "30"),
+        .hd720p50:     ("720p50", "50"),        .hd720p5994:  ("720p59.94", "59.94"),  .hd720p60:  ("720p60", "60"),
+        .uhd2160p2398: ("2160p23.98", "23.98"), .uhd2160p24:  ("2160p24", "24"),
+        .uhd2160p25:   ("2160p25", "25"),       .uhd2160p2997: ("2160p29.97", "29.97"), .uhd2160p30: ("2160p30", "30"),
+        .uhd2160p50:   ("2160p50", "50"),       .uhd2160p5994: ("2160p59.94", "59.94"), .uhd2160p60: ("2160p60", "60"),
+    ]
+    var label: String { Self.table[self]?.label ?? rawValue }
+    /// The signal's frame rate, nil for auto-detect (unknown until the card reports it).
+    var fps: String? { Self.table[self]?.fps }
+}
+
+/// Which physical input the card should listen on (`-video_input`). `auto` leaves the
+/// card's own setting (Desktop Video Setup) in charge.
+enum DeckLinkConnector: String, CaseIterable, Identifiable, Codable {
+    case auto = "auto", sdi, hdmi, opticalSDI = "optical_sdi", component, composite
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .auto:       return "Card default"
+        case .sdi:        return "SDI"
+        case .hdmi:       return "HDMI"
+        case .opticalSDI: return "Optical SDI"
+        case .component:  return "Component"
+        case .composite:  return "Composite"
+        }
+    }
+}
+
+/// Video encoder. `auto` is resolved in StreamManager by resolution, frame rate and
+/// destination (measurements in `buildArgs`). HEVC is for Turbo Receiver (SRT) or the few
+/// platforms that ingest it (YouTube); most RTMP platforms take H.264 only.
+enum VideoCodec: String, CaseIterable, Identifiable, Codable {
+    case auto
+    case h264Hardware = "h264_videotoolbox"
+    case h264Software = "libx264"
+    case hevcHardware = "hevc_videotoolbox"
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .auto:         return "Auto"
+        case .h264Hardware: return "H.264 · hardware"
+        case .h264Software: return "H.264 · x264 (software)"
+        case .hevcHardware: return "HEVC · hardware"
+        }
+    }
+}
+
 enum ResolutionPreset: String, CaseIterable, Identifiable, Codable {
     case hd       = "1920×1080 (16:9)"
     case uhd      = "3840×2160 (4K)"
@@ -17,12 +86,17 @@ enum ResolutionPreset: String, CaseIterable, Identifiable, Codable {
 
     var id: String { rawValue }
 
-    var scaleFilter: String {
-        // format=yuv420p converts 10-bit sources (e.g. ProRes) to 8-bit for H.264
+    /// 8-bit output: format=yuv420p converts 10-bit sources (e.g. ProRes) for H.264.
+    var scaleFilter: String { "\(scaleOnly),format=yuv420p" }
+
+    /// Geometry only. A 10-bit chain puts its pixel-format conversion LAST — after the
+    /// detectors and drawtext — or ffmpeg auto-inserts two extra conversions per frame
+    /// (measured at 4K60: 1.09× vs 1.36× real-time).
+    var scaleOnly: String {
         switch self {
-        case .hd:       return "scale=1920:1080,format=yuv420p"
-        case .uhd:      return "scale=3840:2160,format=yuv420p"
-        case .vertical: return "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920,format=yuv420p"
+        case .hd:       return "scale=1920:1080"
+        case .uhd:      return "scale=3840:2160"
+        case .vertical: return "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920"
         }
     }
 
@@ -127,6 +201,10 @@ struct StreamConfig: Identifiable, Codable {
     var videoDeviceIndex: String      = "0"
     var audioDeviceIndex: String      = ""
     var deckLinkDeviceName: String    = ""   // device name as reported by ffmpeg -f decklink -list_devices
+    var deckLinkFormat: DeckLinkFormat       = .auto   // -format_code; auto = the card detects the signal
+    var deckLinkConnector: DeckLinkConnector = .auto   // -video_input; auto = the card's own setting
+    var deckLinkTenBit: Bool                 = false   // capture 10-bit 4:2:2 (kept only with HEVC hardware)
+    var videoCodec: VideoCodec               = .auto   // encoder; auto picks by resolution/fps/destination
     var networkURL: String            = ""   // live RTSP/RTMP/SRT/HTTP source (e.g. from Turbo Receiver)
     var srtLatencyMs: Int             = 120  // SRT receiver buffer; the latency/robustness trade-off
 
@@ -150,7 +228,8 @@ struct StreamConfig: Identifiable, Codable {
     enum CodingKeys: String, CodingKey {
         case id, name, rtmpPreset, rtmpURL, streamKey, videoBitrate, audioBitrate, fps,
              fpsMatchSource, resolution, inputType, filePath, videoDeviceIndex, audioDeviceIndex,
-             deckLinkDeviceName, networkURL, srtLatencyMs, backupRTMPURL, safetyRecording, fallbackEnabled,
+             deckLinkDeviceName, deckLinkFormat, deckLinkConnector, deckLinkTenBit, videoCodec,
+             networkURL, srtLatencyMs, backupRTMPURL, safetyRecording, fallbackEnabled,
              fallbackMediaPath, adaptiveBitrate, overlay
     }
 
@@ -171,6 +250,10 @@ struct StreamConfig: Identifiable, Codable {
         videoDeviceIndex   = (try? c.decode(String.self,          forKey: .videoDeviceIndex)) ?? "0"
         audioDeviceIndex   = (try? c.decode(String.self,          forKey: .audioDeviceIndex)) ?? ""
         deckLinkDeviceName = (try? c.decode(String.self,          forKey: .deckLinkDeviceName)) ?? ""
+        deckLinkFormat     = (try? c.decode(DeckLinkFormat.self,  forKey: .deckLinkFormat)) ?? .auto
+        deckLinkConnector  = (try? c.decode(DeckLinkConnector.self, forKey: .deckLinkConnector)) ?? .auto
+        deckLinkTenBit     = (try? c.decode(Bool.self,            forKey: .deckLinkTenBit)) ?? false
+        videoCodec         = (try? c.decode(VideoCodec.self,      forKey: .videoCodec)) ?? .auto
         networkURL         = (try? c.decode(String.self,          forKey: .networkURL)) ?? ""
         srtLatencyMs       = (try? c.decode(Int.self,             forKey: .srtLatencyMs)) ?? 120
         backupRTMPURL      = (try? c.decode(String.self,          forKey: .backupRTMPURL)) ?? ""
@@ -280,7 +363,18 @@ struct Diagnostic: Identifiable, Equatable {
                    title: "Blackmagic fa impazzire Pippo",
                    meaning: "The DeckLink device couldn't open — not connected, off, or the Desktop Video driver is too old.",
                    fix: "Check it's connected, install Desktop Video 16+, then re-scan.",
-                   match: ["cannot open decklink", "no decklink devices", "could not open decklink"]),
+                   match: ["cannot open decklink", "no decklink devices", "could not open decklink",
+                           "could not open input device", "could not create decklink iterator"]),
+        Diagnostic(id: "decklink_signal", severity: .warning,
+                   title: "Pippo non vede nessun segnale",
+                   meaning: "The DeckLink opened but there's no signal on its input — nothing plugged in, the wrong connector (SDI vs HDMI), or the card can't auto-detect this format.",
+                   fix: "Check the cable and the Connector setting, or pick the exact Format instead of Auto-detect.",
+                   match: ["cannot autodetect input stream", "no input signal detected"]),
+        Diagnostic(id: "decklink_format", severity: .error,
+                   title: "Pippo ha sbagliato formato",
+                   meaning: "The card refused the chosen DeckLink format or pixel depth — the signal or the card doesn't support it.",
+                   fix: "Pick the format that matches the source (or Auto-detect), and try 8-bit.",
+                   match: ["could not set format code", "raw format", "unsupported video size"]),
         Diagnostic(id: "disk_full", severity: .error,
                    title: "Il deposito di Paperone è pieno",
                    meaning: "The disk has no free space for the safety recording.",
