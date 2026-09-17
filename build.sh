@@ -28,22 +28,41 @@ chmod +x "$BUNDLE/Contents/MacOS/$APP_NAME"
 BIN_DST="$BUNDLE/Contents/Resources/bin"
 LIB_DST="$BIN_DST/lib"
 
-# Pick an ffmpeg that actually RUNS. Homebrew's can be installed but broken
-# (missing libass on this machine), so execution is the test, not existence.
+# Pick an ffmpeg that actually RUNS and is fit for this app. Three traps here,
+# all of which have already bitten:
+#   1. Homebrew's can be installed but broken (missing dylibs), so test execution.
+#   2. "$BUNDLE" is deleted above, so it must NEVER be a candidate source — an
+#      earlier version listed it and silently fell through to a stale x86_64
+#      copy in ./bin.
+#   3. An ffmpeg without libsrt/decklink builds fine and then fails at runtime,
+#      so require the features this app actually uses.
 FFMPEG_SRC=""
-for c in "/opt/homebrew/bin" \
-         "$HOME/streamer/Streamer.app/Contents/Resources/bin" \
-         "./Streamer.app/Contents/Resources/bin"; do
-    if [ -x "$c/ffmpeg" ] && DYLD_LIBRARY_PATH="$c/lib" "$c/ffmpeg" -version >/dev/null 2>&1; then
-        FFMPEG_SRC="$c"; break
-    fi
+ffmpeg_is_fit() {
+    local c="$1"
+    [ -x "$c/ffmpeg" ] || return 1
+    file "$c/ffmpeg" | grep -q 'arm64' || return 1
+    DYLD_LIBRARY_PATH="$c/lib" "$c/ffmpeg" -version >/dev/null 2>&1 || return 1
+    local cfg
+    cfg=$(DYLD_LIBRARY_PATH="$c/lib" "$c/ffmpeg" -hide_banner -version 2>/dev/null)
+    echo "$cfg" | grep -q -- '--enable-libsrt' || return 1
+    echo "$cfg" | grep -q -- '--enable-decklink' || return 1
+    return 0
+}
+for c in "vendor/bin" "/opt/homebrew/bin"; do
+    if ffmpeg_is_fit "$c"; then FFMPEG_SRC="$c"; break; fi
 done
+if [ -z "$FFMPEG_SRC" ]; then
+    echo "‼️   No suitable ffmpeg found (need arm64 with --enable-libsrt and --enable-decklink)."
+    echo "    Checked: vendor/bin, /opt/homebrew/bin."
+    echo "    Refusing to bundle an unfit binary — SRT output and DeckLink would break at runtime."
+    echo "    Fix Homebrew's ffmpeg, or place a good one in vendor/bin/, then re-run."
+    exit 1
+fi
 HOMEBREW_FFMPEG="$FFMPEG_SRC/ffmpeg"
 HOMEBREW_FFPROBE="$FFMPEG_SRC/ffprobe"
 
-if [ -n "$FFMPEG_SRC" ] && [ -d "$FFMPEG_SRC/lib" ]; then
-    # An already-bundled set (ffmpeg + its dylibs) — copy it across as-is.
-    echo "✅  Reusing working ffmpeg from $FFMPEG_SRC"
+if [ -d "$FFMPEG_SRC/lib" ]; then
+    echo "✅  Reusing bundled ffmpeg set from $FFMPEG_SRC"
     mkdir -p "$LIB_DST"
     cp "$HOMEBREW_FFMPEG" "$BIN_DST/ffmpeg"
     [ -f "$HOMEBREW_FFPROBE" ] && cp "$HOMEBREW_FFPROBE" "$BIN_DST/ffprobe" || true
