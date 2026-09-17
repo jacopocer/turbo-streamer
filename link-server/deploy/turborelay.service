@@ -1,0 +1,27 @@
+[Unit]
+Description=Turbo relay (MediaMTX, SRT/RTMP)
+After=network.target turbolink-api.service
+Wants=turbolink-api.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/turborelay
+ExecStart=/opt/turborelay/mediamtx /opt/turborelay/mediamtx.yml
+Restart=always
+RestartSec=3
+
+# The box is 1 vCPU / 2 GB shared with the production sites: the relay must
+# never starve them. These are ceilings, not reservations.
+CPUQuota=60%
+MemoryMax=300M
+Nice=5
+
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

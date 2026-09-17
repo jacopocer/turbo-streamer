@@ -47,6 +47,8 @@ final class StreamManager: ObservableObject {
     private var droppedStreams: Set<UUID> = []   // healthy streams that dropped (pairs drop↔recover alerts)
     @Published private(set) var mutedStreams: Set<UUID> = []   // live streams with the outgoing audio silenced
     private var stdinPipes: [UUID: Pipe] = [:]   // ffmpeg stdin, for runtime filter commands (mute)
+    /// Destination swapped in by pre-flight (SRT blocked → the relay's RTMP door), per run.
+    private var destinationOverride: [UUID: (url: String, key: String)] = [:]
     @Published private(set) var previewing: Set<UUID>     = []     // configs with a live preview running
     private var previewProcesses: [UUID: Process]         = [:]
     private var previewPipes:     [UUID: Pipe]            = [:]
@@ -274,6 +276,7 @@ final class StreamManager: ObservableObject {
         }
         mutedStreams.remove(id)
         stdinPipes[id] = nil
+        destinationOverride[id] = nil
         closeLogFile(id: id)
         refreshPowerAssertion()   // release the wake-lock if nothing is live
     }
@@ -568,12 +571,27 @@ final class StreamManager: ObservableObject {
                 appendLog(line + ".", to: id)
             }
 
-            // ── Pre-flight: is the destination reachable? (non-blocking, informational) ──
-            appendLog("⏳ Pre-flight: checking \(record.config.rtmpURL)…", to: id)
-            let reachable = await Preflight.isReachable(record.config.rtmpURL)
-            appendLog(reachable
-                ? "✓ Destination reachable."
-                : "⚠ Destination not reachable yet — will keep retrying once started.", to: id)
+            // ── Pre-flight: is the destination reachable? ──
+            // SRT is UDP, which venue and hotel networks block more often than TCP. If the
+            // relay was chosen it also has an RTMP door, so the stream moves there by itself.
+            let destURL = record.config.rtmpURL
+            destinationOverride[id] = nil
+            appendLog("⏳ Pre-flight: checking \(destURL)…", to: id)
+            if destURL.lowercased().hasPrefix("srt://") {
+                if await probeSRT(destURL) {
+                    appendLog("✓ SRT destination answers — UDP path is open.", to: id)
+                } else if !record.config.altRTMPURL.isEmpty {
+                    destinationOverride[id] = (record.config.altRTMPURL, record.config.altStreamKey)
+                    appendLog("⚠ SRT (UDP) to \(destURL) is blocked or unreachable from this network — sending RTMP to the relay instead: \(record.config.altRTMPURL).", to: id)
+                } else {
+                    appendLog("⚠ SRT destination not answering — UDP may be blocked here, or the receiver isn't up. Will keep retrying; linking through the relay gives an RTMP fallback.", to: id)
+                }
+            } else {
+                let reachable = await Preflight.isReachable(destURL)
+                appendLog(reachable
+                    ? "✓ Destination reachable."
+                    : "⚠ Destination not reachable yet — will keep retrying once started.", to: id)
+            }
 
             var attempt = 0
             var consecutiveFailures = 0
@@ -775,7 +793,8 @@ final class StreamManager: ObservableObject {
         let args = buildArgs(for: config, recordingURL: recordingURL,
                              bitrateOverride: bitrate, snapshotURL: snapURL,
                              overlayTextURL: overlayURL, captureFPS: captureFramerate[id],
-                             outputFPS: outputFPS, muted: mutedStreams.contains(id))
+                             outputFPS: outputFPS, muted: mutedStreams.contains(id),
+                             destination: destinationOverride[id])
 
         if let rec = recordingURL {
             appendLog("● Safety recording → \(rec.path)", to: id)
@@ -900,7 +919,7 @@ final class StreamManager: ObservableObject {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ffmpegPath)
         let slateFPS = resolvedOutputFPS(for: record.config, captureFPS: captureFramerate[record.id])
-        process.arguments     = buildSlateArgs(for: record.config, bitrate: bitrate, sourcePath: source, outputFPS: slateFPS)
+        process.arguments     = buildSlateArgs(for: record.config, bitrate: bitrate, sourcePath: source, outputFPS: slateFPS, destination: destinationOverride[record.id])
         process.standardInput = FileHandle.nullDevice
 
         let libDir = URL(fileURLWithPath: ffmpegPath)
@@ -946,11 +965,10 @@ final class StreamManager: ObservableObject {
         pipe?.fileHandleForReading.readabilityHandler = nil   // release dispatch source / FD
     }
 
-    private func buildSlateArgs(for config: StreamConfig, bitrate: String, sourcePath: String?, outputFPS: String? = nil) -> [String] {
+    private func buildSlateArgs(for config: StreamConfig, bitrate: String, sourcePath: String?, outputFPS: String? = nil, destination: (url: String, key: String)? = nil) -> [String] {
         let (w, h) = config.resolution.outputDimensions
         let fps    = outputFPS ?? config.fps
         let kbps   = Self.kbps(bitrate)
-        let dest   = "\(config.rtmpURL)/\(config.streamKey)"
 
         var args = ["-hide_banner", "-y", "-loglevel", "error"]
         let videoFilter: String
@@ -977,9 +995,34 @@ final class StreamManager: ObservableObject {
             "-b:v", bitrate, "-maxrate", bitrate, "-bufsize", "\(kbps * 2)k",
             "-g", "\((Int(fps) ?? 30) * 2)", "-tune", "zerolatency",
             "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
-            "-f", "flv", dest
         ]
+        args += primaryOutputArgs(url: destination?.url ?? config.rtmpURL,
+                                  key: destination?.key ?? config.streamKey,
+                                  latencyMs: config.srtLatencyMs)
         return args
+    }
+
+    /// The output half of a command line, for the main stream and the slate alike. An SRT
+    /// destination needs MPEG-TS and the path in `-srt_streamid` (ffmpeg ignores a streamid
+    /// in the URL query); everything else is FLV to "url/key".
+    private func primaryOutputArgs(url: String, key: String, latencyMs: Int) -> [String] {
+        guard url.lowercased().hasPrefix("srt://") else {
+            return ["-f", "flv", "\(url)/\(key)"]
+        }
+        return ["-f", "mpegts",
+                "-srt_streamid", "publish:\(key)",
+                "-pkt_size", "1316",
+                "-latency", "\(max(20, latencyMs) * 1000)",
+                url]
+    }
+
+    /// Tee slaves. The primary keeps the default onfail=abort (a primary drop ends ffmpeg
+    /// and triggers reconnect); backup and recording use onfail=ignore.
+    private func teeTargets(dest: String, backup: String, recordingURL: URL?) -> [String] {
+        var targets = ["[f=flv]\(dest)"]
+        if !backup.isEmpty        { targets.append("[f=flv:onfail=ignore]\(backup)") }
+        if let rec = recordingURL { targets.append("[f=mpegts:onfail=ignore]\(rec.path)") }
+        return targets
     }
 
     /// Stable per-stream path where the live feed's most recent frame is dumped.
@@ -1038,6 +1081,11 @@ final class StreamManager: ObservableObject {
     /// the filter's initial value in buildArgs, so a reconnect comes back muted if it was.
     func toggleMute(id: UUID) {
         guard statuses[id]?.phase.isActive == true else { return }
+        if let c = runningStreams.first(where: { $0.id == id })?.config,
+           c.inputType == .network, c.networkPassthrough {
+            appendLog("🔇 Mute isn't available in passthrough — nothing is re-encoded here. Mute at the source.", to: id)
+            return
+        }
         let nowMuted = !mutedStreams.contains(id)
         if nowMuted { mutedStreams.insert(id) } else { mutedStreams.remove(id) }
         sendFilterCommand("volume -1 volume \(nowMuted ? "0" : "1")", to: id)
@@ -1271,8 +1319,7 @@ final class StreamManager: ObservableObject {
         case .capture:
             a += ["-f", "avfoundation", "-framerate", captureFPS, "-i", "\(config.videoDeviceIndex):none"]
         case .network where !config.networkURL.isEmpty:
-            if config.networkURL.lowercased().hasPrefix("rtsp") { a += ["-rtsp_transport", "tcp"] }
-            a += ["-i", config.networkURL]
+            a += networkInputArgs(for: config)
         default:
             let (w, h) = config.resolution.outputDimensions
             a += ["-f", "lavfi", "-i", "color=c=0x1a1a1a:s=\(w)x\(h):rate=12"]
@@ -1303,6 +1350,40 @@ final class StreamManager: ObservableObject {
     /// The numeric framerate to encode at. With "Match source", this is the source's
     /// native rate, pre-resolved into `captureFPS` during pre-flight (capture: probed
     /// device rate; file: parsed from the media). Falls back to the user's `fps` value.
+    /// SRT reachability. Connects with a deliberately wrong streamid: a rejection means the
+    /// server answered (the UDP path is open); the 3 s timeout means blocked or closed.
+    /// Nothing is published either way.
+    func probeSRT(_ url: String) async -> Bool {
+        let out = await runFFmpegCapturingOutput(args: [
+            "-hide_banner", "-loglevel", "warning",
+            "-f", "lavfi", "-i", "nullsrc=s=16x16:r=1", "-t", "0.5",
+            "-c:v", "libx264", "-preset", "ultrafast", "-f", "mpegts",
+            "-srt_streamid", "publish:__probe:x:x", "-timeout", "3000000", url]).lowercased()
+        return out.contains("rejected") || !out.contains("connection to")
+    }
+
+    /// Input options for a live network source. RTSP goes over TCP (far more reliable than
+    /// the UDP default on a busy LAN). An SRT source URL may carry its streamid in the
+    /// query, which is how Turbo Receiver, the relay and VLC write it; ffmpeg ignores it
+    /// there, so it is lifted into -srt_streamid, with the configured SRT latency.
+    private func networkInputArgs(for config: StreamConfig) -> [String] {
+        var url = config.networkURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        var a: [String] = []
+        let lower = url.lowercased()
+        if lower.hasPrefix("rtsp") { a += ["-rtsp_transport", "tcp"] }
+        if lower.hasPrefix("srt://") {
+            if let q = url.firstIndex(of: "?") {
+                for pair in url[url.index(after: q)...].split(separator: "&") {
+                    let kv = pair.split(separator: "=", maxSplits: 1).map(String.init)
+                    if kv.count == 2, kv[0] == "streamid" { a += ["-srt_streamid", kv[1]] }
+                }
+                url = String(url[..<q])
+            }
+            a += ["-latency", "\(max(20, config.srtLatencyMs) * 1000)"]
+        }
+        return a + ["-i", url]
+    }
+
     private func resolvedOutputFPS(for config: StreamConfig, captureFPS: String?) -> String {
         guard config.fpsMatchSource else { return config.fps }
         // DeckLink: the rate is known only when a format is chosen explicitly.
@@ -1333,14 +1414,17 @@ final class StreamManager: ObservableObject {
         return o
     }
 
-    private func buildArgs(for config: StreamConfig, recordingURL: URL?, bitrateOverride: String? = nil, snapshotURL: URL? = nil, overlayTextURL: URL? = nil, captureFPS: String? = nil, outputFPS: String? = nil, muted: Bool = false) -> [String] {
+    private func buildArgs(for config: StreamConfig, recordingURL: URL?, bitrateOverride: String? = nil, snapshotURL: URL? = nil, overlayTextURL: URL? = nil, captureFPS: String? = nil, outputFPS: String? = nil, muted: Bool = false, destination: (url: String, key: String)? = nil) -> [String] {
         let videoBitrate = bitrateOverride ?? config.videoBitrate
         let bitrateNum = Int(videoBitrate.replacingOccurrences(of: "k", with: "")) ?? 4500
         let bufsize    = "\(bitrateNum * 2)k"
         let outFPS     = outputFPS ?? config.fps
         let fpsInt     = Int((Double(outFPS) ?? 30).rounded())
-        let isSRT      = config.rtmpURL.lowercased().hasPrefix("srt://")
-        let dest       = "\(config.rtmpURL)/\(config.streamKey)"
+        // Pre-flight may have swapped the destination (SRT blocked → the relay's RTMP door).
+        let destURL    = destination?.url ?? config.rtmpURL
+        let destKey    = destination?.key ?? config.streamKey
+        let isSRT      = destURL.lowercased().hasPrefix("srt://")
+        let dest       = "\(destURL)/\(destKey)"
         let backup     = config.backupRTMPURL.trimmingCharacters(in: .whitespaces)
 
         var args: [String]
@@ -1358,13 +1442,10 @@ final class StreamManager: ObservableObject {
                 + deckLinkInputOptions(for: config)
                 + ["-thread_queue_size", "1024", "-i", config.deckLinkDeviceName]
         } else if config.inputType == .network {
-            // Live network source (e.g. Turbo Receiver): no -re and no -stream_loop —
-            // the sender already paces it. RTSP over TCP is far more reliable than the
-            // UDP default on a busy LAN.
-            var a = ["-hide_banner", "-loglevel", "info"]
-            if config.networkURL.lowercased().hasPrefix("rtsp") { a += ["-rtsp_transport", "tcp"] }
-            a += ["-thread_queue_size", "1024", "-i", config.networkURL]
-            args = a
+            // Live network source (Turbo Receiver, the relay, a camera): no -re and no
+            // -stream_loop — the sender already paces it.
+            args = ["-hide_banner", "-loglevel", "info", "-thread_queue_size", "1024"]
+                + networkInputArgs(for: config)
         } else {
             // AVFoundation capture: don't force a resolution, and use a framerate the
             // device actually supports (probed). The default (29.97) and the app's 25
@@ -1383,6 +1464,20 @@ final class StreamManager: ObservableObject {
         // -y: overwrite file outputs (the snapshot JPEG) without prompting — otherwise a
         // reconnect finds the previous snapshot and ffmpeg refuses to open the output.
         args.insert("-y", at: 1)
+
+        // ── Network passthrough: relay the incoming stream untouched ───────────
+        // No decode, no filters, no encoder: what arrives is what leaves, so this hop
+        // adds zero loss. Overlay, scaling, fps, mute, adaptive bitrate and the
+        // freeze/black detectors don't apply; backup and recording still do.
+        if config.inputType == .network && config.networkPassthrough {
+            args += ["-map", "0:v:0", "-map", "0:a:0?", "-c", "copy"]
+            if !isSRT && (!backup.isEmpty || recordingURL != nil) {
+                args += ["-f", "tee", teeTargets(dest: dest, backup: backup, recordingURL: recordingURL).joined(separator: "|")]
+            } else {
+                args += primaryOutputArgs(url: destURL, key: destKey, latencyMs: config.srtLatencyMs)
+            }
+            return args
+        }
 
         // ── Encoder ────────────────────────────────────────────────────────
         // 10-bit survives only into HEVC main10; every other encoder gets 8-bit yuv420p.
@@ -1437,14 +1532,7 @@ final class StreamManager: ObservableObject {
         // ffmpeg ignores it in the query string — it needs the dedicated option.
         // MPEG-TS is the container; tee is not used because per-target streamid
         // cannot be expressed, so backup/recording are skipped on SRT.
-        func primaryOutput() -> [String] {
-            guard isSRT else { return ["-f", "flv", dest] }
-            return ["-f", "mpegts",
-                    "-srt_streamid", "publish:\(config.streamKey)",
-                    "-pkt_size", "1316",
-                    "-latency", "\(max(20, config.srtLatencyMs) * 1000)",
-                    config.rtmpURL]
-        }
+        func primaryOutput() -> [String] { primaryOutputArgs(url: destURL, key: destKey, latencyMs: config.srtLatencyMs) }
 
         let useTee = !isSRT && (!backup.isEmpty || recordingURL != nil)
         let snapshot = snapshotURL != nil
@@ -1464,10 +1552,7 @@ final class StreamManager: ObservableObject {
             // Primary uses default onfail=abort → a primary drop ends ffmpeg and
             // triggers reconnect. Backup & recording use onfail=ignore.
             if useTee {
-                var targets = ["[f=flv]\(dest)"]
-                if !backup.isEmpty        { targets.append("[f=flv:onfail=ignore]\(backup)") }
-                if let rec = recordingURL { targets.append("[f=mpegts:onfail=ignore]\(rec.path)") }
-                args += ["-f", "tee", targets.joined(separator: "|")]
+                args += ["-f", "tee", teeTargets(dest: dest, backup: backup, recordingURL: recordingURL).joined(separator: "|")]
             } else {
                 args += primaryOutput()
             }

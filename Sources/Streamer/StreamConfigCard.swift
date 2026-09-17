@@ -443,6 +443,8 @@ struct StreamConfigCard: View {
                                 config.rtmpURL      = r.url
                                 config.streamKey    = r.streamKey
                                 config.srtLatencyMs = r.latencyMs
+                                config.altRTMPURL   = ""
+                                config.altStreamKey = ""
                                 showLink = false
                             }
                             .buttonStyle(.bordered).controlSize(.small)
@@ -453,8 +455,37 @@ struct StreamConfigCard: View {
                         .foregroundStyle(Color.white.opacity(0.4))
                         .fixedSize(horizontal: false, vertical: true)
                 }
+
+                if let relay = session.relay {
+                    Divider()
+                    Text("Or go through the relay — works from anywhere, no port forwarding; every receiver pulls from it:")
+                        .font(.custom("SofiaPro", size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 8) {
+                        Text("\(relay.srtURL) · path \(relay.path)")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                        Spacer(minLength: 4)
+                        Button("Use relay") {
+                            config.rtmpPreset   = .custom
+                            config.rtmpURL      = relay.srtURL
+                            config.streamKey    = relay.streamKey
+                            config.srtLatencyMs = relay.latencyMs
+                            config.altRTMPURL   = relay.rtmpURL
+                            config.altStreamKey = relay.rtmpKey
+                            showLink = false
+                        }
+                        .buttonStyle(.bordered).controlSize(.small)
+                    }
+                    Text("SRT over UDP, and if UDP is blocked where you are it switches to RTMP to the same relay by itself at start. On each Turbo Receiver: Link with this code, then set the feed to Relay.")
+                        .font(.custom("SofiaPro", size: 10))
+                        .foregroundStyle(Color.white.opacity(0.4))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             } else {
-                Text("Creates a short code. Each receiver enters it and tells this app where to send the stream, so no URL is typed by hand. The video never goes through the server.")
+                Text("Creates a short code. Each receiver enters it and tells this app where to send the stream, so no URL is typed by hand. Direct: the video never touches the server. Relay: it passes through our relay, for when there's no direct path.")
                     .font(.custom("SofiaPro", size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -507,6 +538,14 @@ struct StreamConfigCard: View {
             Text("RTSP, RTMP, SRT or HTTP. From Turbo Receiver, copy the \u{201C}OBS · Turbo Streamer\u{201D} URL.")
                 .font(.custom("SofiaPro", size: 10))
                 .foregroundStyle(Color.white.opacity(0.4))
+            Toggle("Relay as-is (no re-encode)", isOn: $config.networkPassthrough)
+                .toggleStyle(.checkbox)
+                .help("Forward the incoming stream untouched: zero added loss and almost no CPU. Resolution, fps, codec, bitrate, overlay, mute and the freeze/black detectors are ignored; the source must already be what the platform accepts (H.264/AAC, keyframe every 2 s). Backup and recording still work.")
+            if config.networkPassthrough {
+                Text("Passthrough: what arrives is what leaves. Video settings below don't apply.")
+                    .font(.custom("SofiaPro", size: 10))
+                    .foregroundStyle(.orange.opacity(0.8))
+            }
         }
     }
 

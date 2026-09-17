@@ -1,0 +1,38 @@
+# MediaMTX as the public Turbo relay (option B). Two doors only: SRT and RTMP,
+# for ingest and egress. Every publish and read is authorised by turbolink over
+# localhost (POST /v1/auth) against the pairing session's own secrets, so a
+# path is usable only by the streamer that created the code and the receivers
+# that joined it. Nothing else is served, and MoQ is off: it would take a port
+# and try to write a self-signed certificate into the read-only install dir.
+logLevel: info
+logDestinations: [stdout]
+
+api: yes
+apiAddress: 127.0.0.1:9997
+metrics: no
+pprof: no
+playback: no
+
+authMethod: http
+authHTTPAddress: http://127.0.0.1:8814/v1/auth
+authHTTPExclude: []
+
+rtsp: no
+hls: no
+webrtc: no
+moq: no
+
+rtmp: yes
+rtmpAddress: 0.0.0.0:1935
+rtmps: no
+
+srt: yes
+srtAddress: 0.0.0.0:8890
+
+# Bounded so a stalled reader cannot hold memory on a shared box.
+writeQueueSize: 512
+readTimeout: 10s
+writeTimeout: 10s
+
+paths:
+  all_others:

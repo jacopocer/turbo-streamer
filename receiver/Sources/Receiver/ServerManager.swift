@@ -76,6 +76,26 @@ final class ServerManager: ObservableObject {
         if isRunning { Task { await apiCall(method: "DELETE", path: "/v3/config/paths/delete/\(k.key)") } }
     }
 
+    /// Remembers the relay read URL that turbolink handed back for this feed.
+    func setRelaySource(_ k: IngestKey, _ source: String) {
+        guard let i = keys.firstIndex(where: { $0.id == k.id }) else { return }
+        keys[i].relaySource = source
+    }
+
+    /// Direct (a publisher sends to this app) or Relay (MediaMTX pulls the feed from the
+    /// public relay). Applied live through the API while the server runs; "publisher" is
+    /// MediaMTX's word for "no source, wait for someone to publish".
+    func setPullFromRelay(_ k: IngestKey, _ on: Bool) {
+        guard let i = keys.firstIndex(where: { $0.id == k.id }) else { return }
+        keys[i].pullFromRelay = on
+        let src = (on && !keys[i].relaySource.isEmpty) ? keys[i].relaySource : "publisher"
+        appendLog(on ? "↓ \(k.name): pulling from the relay." : "↓ \(k.name): direct — waiting for a publisher.")
+        if isRunning {
+            let body = "{\"source\":\"\(src)\"}"
+            Task { await apiCall(method: "PATCH", path: "/v3/config/paths/patch/\(k.key)", body: body) }
+        }
+    }
+
     func regenerateKey(_ k: IngestKey) {
         guard let i = keys.firstIndex(where: { $0.id == k.id }) else { return }
         let old = keys[i].key
@@ -184,12 +204,21 @@ final class ServerManager: ObservableObject {
         webrtc: no
         srt: yes
         srtAddress: 0.0.0.0:\(Ports.srt)
+        moq: no
         paths:
 
         """
         // Only declared keys are accepted — an unknown path is refused at publish time.
+        // A feed in Relay mode has a source: MediaMTX pulls it from the public relay
+        // instead of waiting for a publisher. (moq is off: MediaMTX 1.21 enables it by
+        // default, taking :8892 and writing a self-signed cert into the working dir.)
         if keys.isEmpty { yml += "  _placeholder:\n" }
-        else { for k in keys { yml += "  \(k.key):\n" } }
+        else {
+            for k in keys {
+                yml += "  \(k.key):\n"
+                if k.pullFromRelay, !k.relaySource.isEmpty { yml += "    source: \(k.relaySource)\n" }
+            }
+        }
 
         let dir = (FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
                    ?? URL(fileURLWithPath: NSTemporaryDirectory()))

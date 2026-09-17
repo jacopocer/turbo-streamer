@@ -11,7 +11,20 @@ enum LinkClient {
         return stored.isEmpty ? defaultBase : stored
     }
 
-    struct JoinResult: Decodable { let ok: Bool; let receiverId: String; let sessionName: String }
+    /// Where this receiver can pull the feed from if the streamer sends through the relay.
+    struct Relay: Decodable {
+        let host: String
+        let srtPort: Int
+        let path: String
+        let latencyMs: Int
+        let source: String   // MediaMTX path source: srt://host:port?streamid=read:path:user:pass
+    }
+    struct JoinResult: Decodable {
+        let ok: Bool
+        let receiverId: String
+        let sessionName: String
+        let relay: Relay?
+    }
     private struct APIError: Decodable { let error: String }
 
     enum Failure: LocalizedError {

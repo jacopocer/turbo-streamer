@@ -206,7 +206,10 @@ struct StreamConfig: Identifiable, Codable {
     var deckLinkTenBit: Bool                 = false   // capture 10-bit 4:2:2 (kept only with HEVC hardware)
     var videoCodec: VideoCodec               = .auto   // encoder; auto picks by resolution/fps/destination
     var networkURL: String            = ""   // live RTSP/RTMP/SRT/HTTP source (e.g. from Turbo Receiver)
+    var networkPassthrough: Bool      = false // Network input: relay the stream as-is, no decode/re-encode
     var srtLatencyMs: Int             = 120  // SRT receiver buffer; the latency/robustness trade-off
+    var altRTMPURL: String            = ""   // relay's RTMP door: pre-flight switches to it when SRT (UDP) is blocked
+    var altStreamKey: String          = ""
 
     // Failsafe options
     var backupRTMPURL: String         = ""    // full backup destination (url/key); empty = none
@@ -229,7 +232,8 @@ struct StreamConfig: Identifiable, Codable {
         case id, name, rtmpPreset, rtmpURL, streamKey, videoBitrate, audioBitrate, fps,
              fpsMatchSource, resolution, inputType, filePath, videoDeviceIndex, audioDeviceIndex,
              deckLinkDeviceName, deckLinkFormat, deckLinkConnector, deckLinkTenBit, videoCodec,
-             networkURL, srtLatencyMs, backupRTMPURL, safetyRecording, fallbackEnabled,
+             networkURL, networkPassthrough, srtLatencyMs, altRTMPURL, altStreamKey,
+             backupRTMPURL, safetyRecording, fallbackEnabled,
              fallbackMediaPath, adaptiveBitrate, overlay
     }
 
@@ -255,7 +259,10 @@ struct StreamConfig: Identifiable, Codable {
         deckLinkTenBit     = (try? c.decode(Bool.self,            forKey: .deckLinkTenBit)) ?? false
         videoCodec         = (try? c.decode(VideoCodec.self,      forKey: .videoCodec)) ?? .auto
         networkURL         = (try? c.decode(String.self,          forKey: .networkURL)) ?? ""
+        networkPassthrough = (try? c.decode(Bool.self,            forKey: .networkPassthrough)) ?? false
         srtLatencyMs       = (try? c.decode(Int.self,             forKey: .srtLatencyMs)) ?? 120
+        altRTMPURL         = (try? c.decode(String.self,          forKey: .altRTMPURL)) ?? ""
+        altStreamKey       = (try? c.decode(String.self,          forKey: .altStreamKey)) ?? ""
         backupRTMPURL      = (try? c.decode(String.self,          forKey: .backupRTMPURL)) ?? ""
         safetyRecording    = (try? c.decode(Bool.self,            forKey: .safetyRecording)) ?? false
         fallbackEnabled    = (try? c.decode(Bool.self,            forKey: .fallbackEnabled)) ?? false
@@ -292,6 +299,16 @@ extension StreamConfig {
 enum DiagnosticSeverity: Equatable { case error, warning, info }
 
 /// A human-readable translation of a known failure signature in the ffmpeg / app log.
+extension Diagnostic {
+    /// Raised from measured progress (speed < 1x for a few seconds), not from a log line.
+    static let encoderBehind = Diagnostic(
+        id: "encoder_behind", severity: .warning,
+        title: "Archimede non sta dietro",
+        meaning: "The encoder runs slower than real time (speed under 1x): frames get dropped and the stream stutters. This Mac can't sustain this resolution, frame rate and codec together.",
+        fix: "Change Codec (HEVC hardware for 4K60 to Turbo Receiver; hardware H.264 instead of x264 on a slower Mac), or lower the frame rate or resolution.",
+        match: [])
+}
+
 /// The catalog is plain data — add entries freely; matchers are lowercase substrings.
 struct Diagnostic: Identifiable, Equatable {
     let id: String
@@ -401,6 +418,7 @@ struct StreamStatus {
     var liveDrop: String?
     var inputWarning: String?     // themed freeze/black badge text, or nil — content issue, not a disconnect
     var currentDiagnostic: Diagnostic?   // plain-language translation of the latest failure (nil = all good)
+    var slowSamples = 0           // consecutive progress lines with speed < 0.95x (encoder falling behind)
 
     // Themed badge text for the freeze / black content detectors (Topolino voice).
     static let frozenBadge = "Pippo si è freezato, prova a dargli una botta!"
@@ -438,6 +456,16 @@ struct StreamStatus {
         // surface the first matched failure for the Live card's plain-language panel.
         if sawProgress { currentDiagnostic = nil }
         else if let issue = firstIssue { currentDiagnostic = issue }
+        // Encoder slower than real time is not an error line, so it is measured here: ~3 s
+        // of consecutive progress under 0.95x (the first seconds of a run read low while
+        // buffers fill, which the streak absorbs). Machine-independent: whatever Mac this
+        // runs on, a codec it can't sustain shows up here within seconds.
+        if sawProgress {
+            if let s = liveSpeed, let v = Double(s.replacingOccurrences(of: "x", with: "")) {
+                slowSamples = v < 0.95 ? slowSamples + 1 : 0
+            }
+            if slowSamples >= 6 { currentDiagnostic = Diagnostic.encoderBehind }
+        }
         return sawProgress
     }
 
