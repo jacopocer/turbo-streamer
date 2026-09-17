@@ -20,3 +20,6 @@ Resources/Fonts/
 
 # Claude Code session data / worktrees
 .claude/
+
+# MediaMTX binary for the receiver app (fetched, not tracked)
+receiver/vendor/
