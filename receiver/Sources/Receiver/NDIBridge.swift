@@ -82,7 +82,7 @@ extension ServerManager {
         return (w, h, fps, hasAudio)
     }
 
-    private func runCapturing(_ path: String, _ args: [String]) async -> String {
+    func runCapturing(_ path: String, _ args: [String]) async -> String {
         let env = subprocessEnv()
         return await Task.detached {
             let p = Process()

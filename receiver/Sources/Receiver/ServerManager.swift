@@ -40,6 +40,8 @@ final class ServerManager: ObservableObject {
     private var pollTask: Task<Void, Never>?
     private var lastBytes: [String: (bytes: Int, at: Date)] = [:]
     private var relayFallbackTasks: [String: Task<Void, Never>] = [:]
+    /// Per feed, which relay transport is live: "srt" (best), "rtmp" (fallback), "connecting", "failed".
+    @Published private(set) var relayTransport: [String: String] = [:]
     private static let keysKey = "TurboReceiver.keys.v1"
 
     let mediamtxPath: String
@@ -118,16 +120,55 @@ final class ServerManager: ObservableObject {
         relayFallbackTasks[k.key]?.cancel(); relayFallbackTasks[k.key] = nil
         if !on {
             appendLog("↓ \(k.name): direct — waiting for a publisher.")
+            relayTransport[k.key] = nil
             if isRunning { Task { await self.applySource(k.key, "publisher") } }
             return
         }
         guard !keys[i].relaySource.isEmpty else { return }
-        let key = k.key
-        // Prefer RTMP over TCP for the relay: reliable where UDP is blocked. SRT only when
-        // there is no RTMP URL (older sessions).
-        let src = keys[i].relaySourceRTMP.isEmpty ? keys[i].relaySource : keys[i].relaySourceRTMP
-        appendLog("↓ \(k.name): pulling from the relay over \(keys[i].relaySourceRTMP.isEmpty ? "SRT" : "RTMP").")
-        if isRunning, !src.isEmpty { Task { await self.applySource(key, src) } }
+        if isRunning { startRelayPull(k) }
+    }
+
+    /// The relay transport ladder, best first: try SRT (low latency, HEVC-capable); if the
+    /// relay's SRT port isn't reachable (UDP blocked on this network), fall back to RTMP
+    /// over TCP and WARN. Runs on server start and on the Direct/Relay toggle, so a fallback
+    /// is chosen the same way in both cases and is always announced.
+    func startRelayPull(_ k: IngestKey) {
+        let key = k.key, name = k.name
+        let srt = k.relaySource, rtmp = k.relaySourceRTMP
+        guard !srt.isEmpty else { return }
+        relayFallbackTasks[key]?.cancel()
+        relayTransport[key] = "connecting"
+        relayFallbackTasks[key] = Task { [weak self] in
+            guard let self else { return }
+            // Probe whether the relay's SRT (UDP) answers at all — this tells "blocked"
+            // apart from "no publisher yet", so we never drop to RTMP just because the
+            // streamer hasn't started.
+            let reachable: Bool
+            if rtmp.isEmpty { reachable = true }
+            else { reachable = await self.probeSRTReachable(srt) }
+            if Task.isCancelled { return }
+            if reachable {
+                self.appendLog("↓ \(name): relay over SRT (best quality).")
+                self.relayTransport[key] = "srt"
+                await self.applySource(key, srt)
+            } else {
+                self.appendLog("⚠️ \(name): relay SRT (UDP) is blocked on this network — falling back to RTMP over TCP. Latency is higher and HEVC is not carried.")
+                self.relayTransport[key] = "rtmp"
+                await self.applySource(key, rtmp)
+            }
+        }
+    }
+
+    /// True if the relay's SRT port answers a handshake (reachable), false if it times out
+    /// (UDP blocked). Connects with a deliberately wrong streamid and never publishes.
+    private func probeSRTReachable(_ srtSource: String) async -> Bool {
+        guard let base = srtSource.split(separator: "?").first else { return false }
+        let out = await runCapturing(ffmpegPath, [
+            "-hide_banner", "-loglevel", "warning",
+            "-f", "lavfi", "-i", "nullsrc=s=16x16:r=1", "-t", "0.4",
+            "-c:v", "libx264", "-preset", "ultrafast", "-f", "mpegts",
+            "-srt_streamid", "publish:__probe:x:x", "-timeout", "3000000", String(base)]).lowercased()
+        return out.contains("rejected") || !out.contains("connection to")
     }
 
     private func applySource(_ key: String, _ source: String) async {
@@ -214,6 +255,8 @@ final class ServerManager: ObservableObject {
             isRunning = true
             appendLog("▶ Server started — RTMP :\(Ports.rtmp) · RTSP :\(Ports.rtsp) · HLS :\(Ports.hls)")
             startPolling()
+            // Relay feeds: pick a transport (SRT first, RTMP fallback) now that the API is up.
+            for k in keys where k.pullFromRelay && !k.relaySource.isEmpty { startRelayPull(k) }
             // Expose the SRT door on the Turbo network too.
             Task { [weak self] in
                 guard let self else { return }
@@ -275,13 +318,10 @@ final class ServerManager: ObservableObject {
         else {
             for k in keys {
                 yml += "  \(k.key):\n"
-                // Relay pull defaults to RTMP over TCP: the relay is used exactly when a
-                // network is hostile, and those block SRT's UDP (port 8890) far more often
-                // than TCP 1935. SRT stays available for the direct path, not the relay.
-                if k.pullFromRelay {
-                    let src = k.relaySourceRTMP.isEmpty ? k.relaySource : k.relaySourceRTMP
-                    if !src.isEmpty { yml += "    source: \(src)\n" }
-                }
+                // Relay feeds start with no source; the transport ladder (SRT first, then
+                // RTMP) picks and applies one on start via the API, so the choice — and the
+                // fallback warning — is the same whether the server just started or the user
+                // just switched to Relay.
             }
         }
 
