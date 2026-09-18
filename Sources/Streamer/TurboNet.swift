@@ -114,10 +114,15 @@ final class TurboNet: ObservableObject {
     /// yields a fresh login link — for when the wrong account was used. The old node
     /// stays listed in that account's Tailscale console until removed there.
     func unlinkAccount() async {
+        // Deregister on the control server first: Tailscale refuses to register a node
+        // key it already knows under another account until that node has logged out.
+        if process != nil {
+            _ = await command(["cmd": "logout", "id": "logout"], id: "logout")
+        }
         stop()
         try? FileManager.default.removeItem(at: stateDir)
         try? await Task.sleep(for: .milliseconds(300))
-        log("🕸 Turbo network: account unlinked — joining again.")
+        log("🕸 Turbo network: account unlinked — joining again with a fresh identity.")
         await start()
     }
 
@@ -189,6 +194,8 @@ final class TurboNet: ObservableObject {
             waiters.removeValue(forKey: id)?.resume(returning: "\(o["port"] ?? 0)")
         case "local":
             waiters.removeValue(forKey: id)?.resume(returning: o["addr"] as? String)
+        case "logged_out":
+            waiters.removeValue(forKey: id)?.resume(returning: "ok")
         case "peer":
             let direct = o["direct"] as? Bool ?? false
             let relay = o["relay"] as? String ?? ""
