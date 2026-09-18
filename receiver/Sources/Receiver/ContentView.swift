@@ -83,9 +83,17 @@ struct ContentView: View {
         let net = server.turboNet
         switch net.state {
         case .up:
-            Label(net.ip, systemImage: "point.3.connected.trianglepath.dotted")
-                .font(.system(size: 11)).foregroundStyle(.green)
-                .help("Turbo network: reachable from anywhere at this address (\(net.hostname)). The pairing announces it.")
+            Menu {
+                Text("\(net.hostname)")
+                Divider()
+                Button("Unlink account…") { Task { await net.unlinkAccount() } }
+            } label: {
+                Label(net.ip, systemImage: "point.3.connected.trianglepath.dotted")
+                    .font(.system(size: 11)).foregroundStyle(.green)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Turbo network: reachable from anywhere at this address (\(net.hostname)). The pairing announces it. Click to unlink the account.")
         case .starting:
             Label("joining…", systemImage: "point.3.connected.trianglepath.dotted")
                 .font(.system(size: 11)).foregroundStyle(.secondary)

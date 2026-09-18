@@ -110,6 +110,17 @@ final class TurboNet: ObservableObject {
         process = nil; stdin = nil; state = .off; ip = ""
     }
 
+    /// Forgets this node's identity (the login) and joins again from scratch, which
+    /// yields a fresh login link — for when the wrong account was used. The old node
+    /// stays listed in that account's Tailscale console until removed there.
+    func unlinkAccount() async {
+        stop()
+        try? FileManager.default.removeItem(at: stateDir)
+        try? await Task.sleep(for: .milliseconds(300))
+        log("🕸 Turbo network: account unlinked — joining again.")
+        await start()
+    }
+
     // MARK: - Tunnels
 
     /// Receiver: expose local UDP `to` as tailnet :port. Returns when the listener is up.
