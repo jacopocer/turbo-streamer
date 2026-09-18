@@ -6,6 +6,7 @@ struct SetupView: View {
     @State private var showSaveProfile = false
     @State private var newProfileName  = ""
     @State private var showAlerts      = false
+    @State private var showNetwork     = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -16,6 +17,8 @@ struct SetupView: View {
                     .font(.custom("SofiaPro", size: 13))
                     .foregroundStyle(Color.white.opacity(0.45))
                 Spacer()
+
+                networkButton
 
                 alertsButton
 
@@ -129,6 +132,71 @@ struct SetupView: View {
     }
 
     // MARK: - Helpers
+
+    @ViewBuilder
+    private var networkButton: some View {
+        let net = manager.turboNet
+        let (icon, tint, text): (String, Color, String) = {
+            switch net.state {
+            case .up:             return ("point.3.connected.trianglepath.dotted", Color.green, net.ip)
+            case .starting:       return ("point.3.connected.trianglepath.dotted", Color.secondary, "joining…")
+            case .needsLogin:     return ("person.crop.circle.badge.exclamationmark", Color.orange, "login needed")
+            case .failed:         return ("point.3.connected.trianglepath.dotted", Color.orange, "off")
+            case .off:            return ("point.3.connected.trianglepath.dotted", Color.white.opacity(0.35), "off")
+            }
+        }()
+        Button {
+            showNetwork.toggle()
+        } label: {
+            Label(text, systemImage: icon)
+                .font(.custom("SofiaPro", size: 12))
+                .foregroundStyle(tint)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .help("Turbo network: this app's own Tailscale node. Receivers on it are reachable from anywhere.")
+        .popover(isPresented: $showNetwork, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Turbo network")
+                    .font(.custom("SofiaPro-SemiBold", size: 13))
+                Text("A private network between the Turbo apps, built into the app (Tailscale, no install). A Turbo Receiver that shows a 100.x address is reachable from any network; the stream still goes straight to it, encrypted.")
+                    .font(.custom("SofiaPro", size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    switch net.state {
+                    case .up:
+                        Text("Connected as \(net.ip) · \(net.hostname)").font(.system(size: 11, design: .monospaced))
+                    case .needsLogin:
+                        Button("Open login page") { net.openLogin() }.buttonStyle(.borderedProminent).controlSize(.small)
+                        Text("One time, then it remembers.").font(.custom("SofiaPro", size: 11)).foregroundStyle(.secondary)
+                    case .starting:
+                        ProgressView().controlSize(.small); Text("Joining…").font(.custom("SofiaPro", size: 11))
+                    case .failed(let m):
+                        Text(m).font(.custom("SofiaPro", size: 11)).foregroundStyle(.orange)
+                        Button("Retry") { Task { await net.start() } }.buttonStyle(.bordered).controlSize(.small)
+                    case .off:
+                        Button("Connect") { Task { await net.start() } }.buttonStyle(.borderedProminent).controlSize(.small)
+                    }
+                    Spacer()
+                }
+                if !manager.networkLog.isEmpty {
+                    Divider()
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(manager.networkLog.suffix(12).enumerated()), id: \.offset) { _, l in
+                                Text(l).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 140)
+                }
+            }
+            .padding(16)
+            .frame(width: 400)
+        }
+    }
 
     @ViewBuilder
     private var alertsButton: some View {

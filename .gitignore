@@ -23,3 +23,6 @@ Resources/Fonts/
 
 # MediaMTX binary for the receiver app (fetched, not tracked)
 receiver/vendor/
+
+# turbo-net helper binary (built by net/build-net.sh)
+net/bin/

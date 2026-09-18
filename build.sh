@@ -109,6 +109,15 @@ else
     echo "⚠️   No ffmpeg found — app will fall back to system ffmpeg."
 fi
 
+# ── turbo-net (embedded Tailscale node, tsnet) ─────────────────────────────
+if [ -x net/bin/turbo-net ] || [ -x ../net/bin/turbo-net ]; then
+    SRC=$([ -x net/bin/turbo-net ] && echo net/bin/turbo-net || echo ../net/bin/turbo-net)
+    cp "$SRC" "$BIN_DST/turbo-net" && chmod +x "$BIN_DST/turbo-net"
+    echo "✅  Bundled turbo-net ($(lipo -archs "$BIN_DST/turbo-net"))"
+else
+    echo "⚠️   net/bin/turbo-net missing (run net/build-net.sh) — Turbo network unavailable in this build"
+fi
+
 # App icon + logos
 [ -f "Resources/AppIcon.icns" ] && cp Resources/AppIcon.icns "$BUNDLE/Contents/Resources/AppIcon.icns" || true
 [ -f "Resources/indigital-logo.png" ] && cp Resources/indigital-logo.png "$BUNDLE/Contents/Resources/indigital-logo.png" || true

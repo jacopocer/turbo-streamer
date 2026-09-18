@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import SwiftUI
 import AppKit
 import Darwin
@@ -38,6 +39,11 @@ final class ServerManager: ObservableObject {
 
     let mediamtxPath: String
 
+    /// The app's own Tailscale node (see TurboNet): once up, its 100.x address is what
+    /// the pairing announces, so a streamer anywhere can reach this receiver directly.
+    let turboNet = TurboNet(appTag: "receiver")
+    private var netObservers: [AnyCancellable] = []
+
     init() {
         // Bundled first, then the dev checkout's vendor/ dir.
         let bundled = Bundle.main.bundlePath + "/Contents/Resources/bin/mediamtx"
@@ -54,10 +60,25 @@ final class ServerManager: ObservableObject {
         }
         refreshAddresses()
 
+        turboNet.log = { [weak self] line in self?.appendLog(line) }
+        turboNet.$ip
+            .receive(on: RunLoop.main)
+            .sink { [weak self] ip in
+                guard let self else { return }
+                self.refreshAddresses()
+                if !ip.isEmpty { self.selectedAddress = ip }   // the remote-capable address wins
+            }
+            .store(in: &netObservers)
+        turboNet.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &netObservers)
+        Task { await turboNet.start() }
+
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
                                                object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
-            MainActor.assumeIsolated { self.killServer() }
+            MainActor.assumeIsolated { self.killServer(); self.turboNet.stop() }
         }
     }
 
@@ -165,6 +186,13 @@ final class ServerManager: ObservableObject {
             isRunning = true
             appendLog("▶ Server started — RTMP :\(Ports.rtmp) · RTSP :\(Ports.rtsp) · HLS :\(Ports.hls)")
             startPolling()
+            // Expose the SRT door on the Turbo network too.
+            Task { [weak self] in
+                guard let self else { return }
+                if await self.turboNet.listen(id: "srt", port: Ports.srt, to: "127.0.0.1:\(Ports.srt)") {
+                    self.appendLog("🕸 SRT :\(Ports.srt) also reachable on the Turbo network at \(self.turboNet.ip).")
+                }
+            }
         } catch {
             appendLog("✗ Failed to launch mediamtx: \(error.localizedDescription)")
         }
@@ -172,6 +200,7 @@ final class ServerManager: ObservableObject {
 
     func stop() {
         stopAllNDI()
+        turboNet.close(id: "srt")
         pollTask?.cancel(); pollTask = nil
         process?.terminate()
         process = nil
@@ -314,6 +343,7 @@ final class ServerManager: ObservableObject {
             }
             freeifaddrs(ifaddr)
         }
+        if !turboNet.ip.isEmpty, !found.contains(turboNet.ip) { found.insert(turboNet.ip, at: 0) }
         addresses = found
         if selectedAddress.isEmpty || !found.contains(selectedAddress) {
             // Prefer a Tailscale address (100.x) if present — that's the remote path.

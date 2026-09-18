@@ -51,6 +51,8 @@ struct ContentView: View {
 
             Spacer()
 
+            netStatus
+
             Picker("", selection: $server.selectedAddress) {
                 ForEach(server.addresses, id: \.self) { Text($0).tag($0) }
             }
@@ -72,6 +74,42 @@ struct ContentView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(Color(red: 0.10, green: 0.10, blue: 0.10))
+    }
+
+    // MARK: - Turbo network status (this app's own Tailscale node)
+
+    @ViewBuilder
+    private var netStatus: some View {
+        let net = server.turboNet
+        switch net.state {
+        case .up:
+            Label(net.ip, systemImage: "point.3.connected.trianglepath.dotted")
+                .font(.system(size: 11)).foregroundStyle(.green)
+                .help("Turbo network: reachable from anywhere at this address (\(net.hostname)). The pairing announces it.")
+        case .starting:
+            Label("joining…", systemImage: "point.3.connected.trianglepath.dotted")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+        case .needsLogin:
+            Button { net.openLogin() } label: {
+                Label("Turbo network: login", systemImage: "person.crop.circle.badge.exclamationmark")
+                    .font(.system(size: 11)).foregroundStyle(.orange)
+            }
+            .buttonStyle(.borderless)
+            .help("One-time login to the Turbo network; the app remembers it afterwards.")
+        case .failed(let m):
+            Button { Task { await net.start() } } label: {
+                Label("Turbo network off", systemImage: "point.3.connected.trianglepath.dotted")
+                    .font(.system(size: 11)).foregroundStyle(.orange)
+            }
+            .buttonStyle(.borderless)
+            .help("\(m) — click to retry")
+        case .off:
+            Button { Task { await net.start() } } label: {
+                Label("Turbo network", systemImage: "point.3.connected.trianglepath.dotted")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+        }
     }
 
     // MARK: - Feed card

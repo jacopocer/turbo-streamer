@@ -16,6 +16,9 @@ Environment=RELAY_HOST=turbostreamer.indigital.tv
 Environment=RELAY_SRT_PORT=8890
 Environment=RELAY_RTMP_PORT=1935
 Environment=RELAY_LATENCY_MS=200
+# Tailscale API token for minting join keys: set in /opt/turbolink/tailnet.env
+# (TS_API_TOKEN=tskey-api-…, TS_TAILNET=-, TS_TAG=tag:turbo), never in this unit.
+EnvironmentFile=-/opt/turbolink/tailnet.env
 Restart=on-failure
 RestartSec=5
 

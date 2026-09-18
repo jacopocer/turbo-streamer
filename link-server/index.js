@@ -29,6 +29,18 @@ const MAX_RECEIVERS = 32;
 
 // Public relay coordinates handed to both apps. Host must resolve straight to the
 // box (no Cloudflare proxy: SRT is UDP, RTMP is raw TCP).
+// Turbo tailnet: the apps embed a Tailscale node (tsnet) and get their join key
+// from here, minted on demand through the Tailscale API with a token that lives
+// only on this box. Keys are single-use, short-lived, pre-authorised, ephemeral
+// (the node vanishes when the app quits) and tagged, so the tailnet's ACL can
+// confine Turbo nodes to each other's SRT port.
+const TS = {
+  token: process.env.TS_API_TOKEN || '',
+  tailnet: process.env.TS_TAILNET || '-',
+  tag: process.env.TS_TAG || 'tag:turbo',
+  keyTTL: Number(process.env.TS_KEY_TTL_SECONDS || 600),
+};
+
 const RELAY = {
   host: process.env.RELAY_HOST || 'turbostreamer.indigital.tv',
   srtPort: Number(process.env.RELAY_SRT_PORT || 8890),
@@ -146,6 +158,30 @@ const server = http.createServer(async (req, res) => {
       return json(res, 201, { code: s.code, secret: s.secret,
                               expiresAt: new Date(s.createdAt + TTL_MS).toISOString(),
                               relay: relayForStreamer(s) });
+    }
+
+    // POST /v1/tailnet/key — an app asks for a key to join the Turbo tailnet
+    if (req.method === 'POST' && url.pathname === '/v1/tailnet/key') {
+      if (!TS.token) return json(res, 503, { error: 'tailnet not configured on this server' });
+      const body = await readBody(req);
+      const r = await fetch(`https://api.tailscale.com/api/v2/tailnet/${encodeURIComponent(TS.tailnet)}/keys`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${TS.token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          description: `turbo ${str(body.app, 20) || 'app'} ${str(body.host, 40)}`.trim(),
+          expirySeconds: TS.keyTTL,
+          capabilities: { devices: { create: {
+            reusable: false, ephemeral: true, preauthorized: true, tags: [TS.tag],
+          } } },
+        }),
+      });
+      if (!r.ok) {
+        const detail = (await r.text()).slice(0, 200);
+        console.error('tailnet key mint failed:', r.status, detail);
+        return json(res, 502, { error: `tailnet key refused (${r.status})` });
+      }
+      const k = await r.json();
+      return json(res, 200, { authKey: k.key, expiresIn: TS.keyTTL, tag: TS.tag });
     }
 
     // POST /v1/auth — MediaMTX (the relay, on this box) asks whether an action is

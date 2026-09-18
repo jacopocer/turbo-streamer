@@ -40,6 +40,7 @@ works during it.
 | `POST /v1/session` | `{name}` → `{code, secret, expiresAt, relay{srtURL, streamKey, rtmpURL, rtmpKey, latencyMs, path}}` |
 | `POST /v1/session/:code/join` | `{label, protocol, host, port, streamKey, latencyMs}` → `{ok, receiverId, relay{source, path, latencyMs}}` |
 | `GET /v1/session/:code` | header `x-secret` → `{name, receivers[], relay}` |
+| `POST /v1/tailnet/key` | `{app, host}` → `{authKey, expiresIn, tag}`: a single-use, ephemeral, pre-authorised, tagged Tailscale key minted via the Tailscale API. 503 until `TS_API_TOKEN` is set on the server |
 | `POST /v1/auth` | MediaMTX only, over localhost: `{action, path, password, ip, …}` → 200 / 401; 404 when it arrives through nginx |
 | `DELETE /v1/session/:code` | header `x-secret` → `{ok}` |
 | `GET /health` | `{ok, sessions}` |
@@ -47,6 +48,18 @@ works during it.
 The code is the capability to *join*; the secret is the capability to *read*
 who joined. Codes use an unambiguous alphabet (no `0/O/1/I`) so they can be read
 over the phone.
+
+## Turbo network (Tailscale) setup, once
+
+1. Tailscale account (free). In the admin console → Access controls, add the tag and confine it:
+   ```json
+   "tagOwners": { "tag:turbo": ["autogroup:admin"] },
+   "acls": [ { "action": "accept", "src": ["tag:turbo"], "dst": ["tag:turbo:8890"] } ]
+   ```
+2. Settings → Keys → generate an **API access token** (not an auth key).
+3. On the box, as root: `printf 'TS_API_TOKEN=tskey-api-…\nTS_TAILNET=-\nTS_TAG=tag:turbo\n' > /opt/turbolink/tailnet.env && chmod 600 /opt/turbolink/tailnet.env && systemctl restart turbolink-api`.
+
+From then on every app joins by itself at launch. Without the token the apps still work: they show a one-time login link instead.
 
 ## Run locally
 
