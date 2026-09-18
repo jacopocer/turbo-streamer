@@ -138,6 +138,19 @@ func main() {
 			}
 		case "close":
 			emit(map[string]any{"event": "closed", "id": cmd.ID})
+		case "logout":
+			// Tell the control server to forget this node before the app wipes the
+			// local state: Tailscale refuses to register a node key it already knows
+			// under another account ("device already exists; please log out").
+			if lc, err := srv.LocalClient(); err == nil {
+				lctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				err = lc.Logout(lctx)
+				cancel()
+				if err != nil {
+					emit(map[string]any{"event": "error", "id": cmd.ID, "message": "logout: " + err.Error()})
+				}
+			}
+			emit(map[string]any{"event": "logged_out", "id": cmd.ID})
 		default:
 			emit(map[string]any{"event": "error", "id": cmd.ID, "message": "unknown cmd"})
 		}
