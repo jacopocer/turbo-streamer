@@ -205,6 +205,9 @@ final class TurboNet: ObservableObject {
                            : "🕸 Path to \(o["addr"] ?? ""): through Tailscale relay \(relay) — slower; the Turbo relay may do better.")
             }
             peerRelay[id] = relay
+        case "peer_unknown":
+            let addr = o["addr"] as? String ?? ""
+            log("🕸 \(addr) isn't on this Turbo network — the other app is signed in to a different account. Use the same account on both (or Unlink and log in again).")
         case "error":
             let msg = o["message"] as? String ?? "error"
             log("🕸 Turbo network: \(msg)")

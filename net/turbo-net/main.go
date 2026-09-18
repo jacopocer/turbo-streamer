@@ -299,19 +299,25 @@ func reportPeer(ctx context.Context, srv *tsnet.Server, id, to string, stop <-ch
 	if err != nil {
 		return
 	}
+	first := true
 	for {
-		select {
-		case <-stop:
-			return
-		case <-time.After(5 * time.Second):
+		if !first {
+			select {
+			case <-stop:
+				return
+			case <-time.After(5 * time.Second):
+			}
 		}
+		first = false
 		st, err := lc.Status(ctx)
 		if err != nil {
 			continue
 		}
+		found := false
 		for _, p := range st.Peer {
 			for _, a := range p.TailscaleIPs {
 				if a == want {
+					found = true
 					emit(map[string]any{
 						"event": "peer", "id": id, "addr": want.String(), "online": p.Online,
 						"direct": p.CurAddr != "", "relay": strings.TrimSpace(p.Relay),
@@ -319,6 +325,12 @@ func reportPeer(ctx context.Context, srv *tsnet.Server, id, to string, stop <-ch
 					})
 				}
 			}
+		}
+		// Not in our netmap at all = the other app is on a DIFFERENT account/tailnet,
+		// or it isn't running. The single most common setup mistake, so name it.
+		if !found {
+			emit(map[string]any{"event": "peer_unknown", "id": id, "addr": want.String(),
+				"self": st.Self.TailscaleIPs, "peers": len(st.Peer)})
 		}
 	}
 }

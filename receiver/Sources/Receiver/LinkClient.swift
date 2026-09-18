@@ -17,7 +17,8 @@ enum LinkClient {
         let srtPort: Int
         let path: String
         let latencyMs: Int
-        let source: String   // MediaMTX path source: srt://host:port?streamid=read:path:user:pass
+        let source: String       // SRT path source: srt://host:port?streamid=read:path:user:pass
+        let sourceRTMP: String?  // RTMP fallback for networks that block UDP
     }
 
     /// True for addresses that only work from inside the same network (RFC 1918, link-local,

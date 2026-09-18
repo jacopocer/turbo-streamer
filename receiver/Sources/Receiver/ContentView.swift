@@ -280,7 +280,7 @@ struct ContentView: View {
                                                   port: Ports.srt,
                                                   streamKey: key.key,
                                                   latencyMs: 120)
-                if let relay = r.relay { server.setRelaySource(key, relay.source) }
+                if let relay = r.relay { server.setRelaySource(key, relay.source, rtmp: relay.sourceRTMP ?? "") }
                 linkStatus = r.relay == nil
                     ? "✓ Linked to \(r.sessionName)"
                     : "✓ Linked to \(r.sessionName). If the streamer uses the relay, set this feed to Relay."
@@ -335,6 +335,15 @@ struct ContentView: View {
 
             Spacer()
 
+            if showLog {
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(server.logLines.joined(separator: "\n"), forType: .string)
+                }
+                .buttonStyle(.borderless)
+                .font(.system(size: 11))
+                .help("Copy the whole log to the clipboard")
+            }
             Button(showLog ? "Hide log" : "Show log") { showLog.toggle() }
                 .buttonStyle(.borderless)
                 .font(.system(size: 11))
