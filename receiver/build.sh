@@ -53,6 +53,15 @@ else
     echo "⚠️   ffmpeg not found — NDI output will be unavailable"
 fi
 
+# ── turbo-net (embedded Tailscale node, tsnet) ─────────────────────────────
+if [ -x net/bin/turbo-net ] || [ -x ../net/bin/turbo-net ]; then
+    SRC=$([ -x net/bin/turbo-net ] && echo net/bin/turbo-net || echo ../net/bin/turbo-net)
+    cp "$SRC" "$BIN_DST/turbo-net" && chmod +x "$BIN_DST/turbo-net"
+    echo "✅  Bundled turbo-net ($(lipo -archs "$BIN_DST/turbo-net"))"
+else
+    echo "⚠️   net/bin/turbo-net missing (run net/build-net.sh) — Turbo network unavailable in this build"
+fi
+
 # ── NDI bridge binaries ─────────────────────────────────────────────────────
 if [ -x ndi/bin/ndi-sender ]; then
     cp ndi/bin/ndi-sender ndi/bin/ndi-find "$BIN_DST/" 2>/dev/null || cp ndi/bin/ndi-sender "$BIN_DST/"

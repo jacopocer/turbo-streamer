@@ -14,7 +14,7 @@ Multiple AI chat sessions edit this repo at the same time. **Read this file befo
 ## LOG (newest first)
 
 ### 🔄 IN PROGRESS
-_(none)_
+- `comet-1` — Embedded Tailscale (tsnet helper `net/turbo-net`, join keys minted by turbolink `/v1/tailnet/key`), Receiver listens on the tailnet, Streamer dials through it. Files: `net/`, `link-server/index.js` + unit, `Sources/Streamer/TurboNet.swift` (new), `StreamManager.swift`, `receiver/Sources/Receiver/TurboNet.swift` (new), `ServerManager.swift`, `ContentView.swift`, both `build.sh`, docs. ETA: this session.
 
 ### ✅ DONE (not yet folded into HANDOFF.md)
 - `comet-1` — Relay option B (turbolink relay secrets + `/v1/auth`, MediaMTX relay deploy assets), Streamer "Use relay" + SRT pre-flight probe with RTMP fallback + network passthrough + srt streamid input + encoder-behind diagnostic + slate on SRT; Receiver Direct/Relay per feed, MoQ off. Verified locally end to end; box deploy `deploy-relay.sh` owner-run. Docs updated. Both apps rebuilt + installed. Commit `39c3678`.

@@ -41,6 +41,11 @@ final class StreamManager: ObservableObject {
     private var logFileHandles: [UUID: FileHandle]        = [:]
     private var lastProgressAt: [UUID: Date]              = [:]
     private var framesSeenThisRun: Set<UUID>              = []    // did the current ffmpeg run ever push a frame?
+    private var tailnetRuns: Set<UUID>                    = []    // streams whose SRT goes through the Turbo network tunnel
+
+    /// The app's own Tailscale node (see TurboNet). Started at launch, non-blocking.
+    let turboNet = TurboNet(appTag: "streamer")
+    @Published private(set) var networkLog: [String] = []
     private var slateProcesses: [UUID: Process]           = [:]
     private var slatePipes:     [UUID: Pipe]              = [:]
     private var overlayText:    [UUID: String]            = [:]   // live overlay text per stream
@@ -73,6 +78,13 @@ final class StreamManager: ObservableObject {
         } else {
             ffmpegPath = "/usr/local/bin/ffmpeg"
         }
+
+        turboNet.log = { [weak self] line in
+            guard let self else { return }
+            self.networkLog.append(line)
+            if self.networkLog.count > 60 { self.networkLog.removeFirst(self.networkLog.count - 60) }
+        }
+        Task { await turboNet.start() }
 
         // Restore previously saved configs (assigning in init does not fire didSet)
         if let saved = Self.loadConfigs(), !saved.isEmpty {
@@ -278,6 +290,7 @@ final class StreamManager: ObservableObject {
         mutedStreams.remove(id)
         stdinPipes[id] = nil
         destinationOverride[id] = nil
+        if tailnetRuns.remove(id) != nil { turboNet.close(id: id.uuidString) }
         closeLogFile(id: id)
         refreshPowerAssertion()   // release the wake-lock if nothing is live
     }
@@ -579,11 +592,26 @@ final class StreamManager: ObservableObject {
             // relay was chosen it also has an RTMP door, so the stream moves there by itself.
             let destURL = record.config.rtmpURL
             destinationOverride[id] = nil
+            tailnetRuns.remove(id)
+            // A 100.64/10 destination lives on the Turbo network: reachable only through
+            // this app's own node, so ffmpeg is pointed at a local port that the helper
+            // carries to the peer. Smaller packets there: the tunnel's MTU is 1280.
+            if let (host, port) = Self.srtHostPort(destURL), TurboNet.isTailnetAddress(host) {
+                if let local = await turboNet.dial(id: id.uuidString, to: "\(host):\(port)") {
+                    destinationOverride[id] = ("srt://\(local)", record.config.streamKey)
+                    tailnetRuns.insert(id)
+                    appendLog("🕸 \(host) is on the Turbo network — tunnelling through \(local).", to: id)
+                } else {
+                    appendLog("⚠ Turbo network tunnel to \(host) couldn't be opened (\(turboNet.state)) — trying the address as is.", to: id)
+                }
+            }
+            let probeURL = destinationOverride[id]?.url ?? destURL
             appendLog("⏳ Pre-flight: checking \(destURL)…", to: id)
             if destURL.lowercased().hasPrefix("srt://") {
-                if await probeSRT(destURL) {
+                if await probeSRT(probeURL) {
                     appendLog("✓ SRT destination answers — UDP path is open.", to: id)
                 } else if !record.config.altRTMPURL.isEmpty {
+                    tailnetRuns.remove(id)
                     destinationOverride[id] = (record.config.altRTMPURL, record.config.altStreamKey)
                     appendLog("⚠ SRT (UDP) to \(destURL) is blocked or unreachable from this network — sending RTMP to the relay instead: \(record.config.altRTMPURL).", to: id)
                 } else {
@@ -806,7 +834,8 @@ final class StreamManager: ObservableObject {
                              bitrateOverride: bitrate, snapshotURL: snapURL,
                              overlayTextURL: overlayURL, captureFPS: captureFramerate[id],
                              outputFPS: outputFPS, muted: mutedStreams.contains(id),
-                             destination: destinationOverride[id])
+                             destination: destinationOverride[id],
+                             pktSize: tailnetRuns.contains(id) ? 1200 : 1316)
 
         if let rec = recordingURL {
             appendLog("● Safety recording → \(rec.path)", to: id)
@@ -931,7 +960,7 @@ final class StreamManager: ObservableObject {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ffmpegPath)
         let slateFPS = resolvedOutputFPS(for: record.config, captureFPS: captureFramerate[record.id])
-        process.arguments     = buildSlateArgs(for: record.config, bitrate: bitrate, sourcePath: source, outputFPS: slateFPS, destination: destinationOverride[record.id])
+        process.arguments     = buildSlateArgs(for: record.config, bitrate: bitrate, sourcePath: source, outputFPS: slateFPS, destination: destinationOverride[record.id], pktSize: tailnetRuns.contains(record.id) ? 1200 : 1316)
         process.standardInput = FileHandle.nullDevice
 
         let libDir = URL(fileURLWithPath: ffmpegPath)
@@ -977,7 +1006,7 @@ final class StreamManager: ObservableObject {
         pipe?.fileHandleForReading.readabilityHandler = nil   // release dispatch source / FD
     }
 
-    private func buildSlateArgs(for config: StreamConfig, bitrate: String, sourcePath: String?, outputFPS: String? = nil, destination: (url: String, key: String)? = nil) -> [String] {
+    private func buildSlateArgs(for config: StreamConfig, bitrate: String, sourcePath: String?, outputFPS: String? = nil, destination: (url: String, key: String)? = nil, pktSize: Int = 1316) -> [String] {
         let (w, h) = config.resolution.outputDimensions
         let fps    = outputFPS ?? config.fps
         let kbps   = Self.kbps(bitrate)
@@ -1010,20 +1039,28 @@ final class StreamManager: ObservableObject {
         ]
         args += primaryOutputArgs(url: destination?.url ?? config.rtmpURL,
                                   key: destination?.key ?? config.streamKey,
-                                  latencyMs: config.srtLatencyMs)
+                                  latencyMs: config.srtLatencyMs, pktSize: pktSize)
         return args
+    }
+
+    /// host and port of an srt:// URL (default port 8890), nil for anything else.
+    static func srtHostPort(_ url: String) -> (String, Int)? {
+        guard url.lowercased().hasPrefix("srt://"),
+              let c = URLComponents(string: url.trimmingCharacters(in: .whitespaces)),
+              let h = c.host, !h.isEmpty else { return nil }
+        return (h, c.port ?? 8890)
     }
 
     /// The output half of a command line, for the main stream and the slate alike. An SRT
     /// destination needs MPEG-TS and the path in `-srt_streamid` (ffmpeg ignores a streamid
     /// in the URL query); everything else is FLV to "url/key".
-    private func primaryOutputArgs(url: String, key: String, latencyMs: Int) -> [String] {
+    private func primaryOutputArgs(url: String, key: String, latencyMs: Int, pktSize: Int = 1316) -> [String] {
         guard url.lowercased().hasPrefix("srt://") else {
             return ["-f", "flv", "\(url)/\(key)"]
         }
         return ["-f", "mpegts",
                 "-srt_streamid", "publish:\(key)",
-                "-pkt_size", "1316",
+                "-pkt_size", "\(pktSize)",
                 "-latency", "\(max(20, latencyMs) * 1000)",
                 url]
     }
@@ -1426,7 +1463,7 @@ final class StreamManager: ObservableObject {
         return o
     }
 
-    private func buildArgs(for config: StreamConfig, recordingURL: URL?, bitrateOverride: String? = nil, snapshotURL: URL? = nil, overlayTextURL: URL? = nil, captureFPS: String? = nil, outputFPS: String? = nil, muted: Bool = false, destination: (url: String, key: String)? = nil) -> [String] {
+    private func buildArgs(for config: StreamConfig, recordingURL: URL?, bitrateOverride: String? = nil, snapshotURL: URL? = nil, overlayTextURL: URL? = nil, captureFPS: String? = nil, outputFPS: String? = nil, muted: Bool = false, destination: (url: String, key: String)? = nil, pktSize: Int = 1316) -> [String] {
         let videoBitrate = bitrateOverride ?? config.videoBitrate
         let bitrateNum = Int(videoBitrate.replacingOccurrences(of: "k", with: "")) ?? 4500
         let bufsize    = "\(bitrateNum * 2)k"
@@ -1486,7 +1523,7 @@ final class StreamManager: ObservableObject {
             if !isSRT && (!backup.isEmpty || recordingURL != nil) {
                 args += ["-f", "tee", teeTargets(dest: dest, backup: backup, recordingURL: recordingURL).joined(separator: "|")]
             } else {
-                args += primaryOutputArgs(url: destURL, key: destKey, latencyMs: config.srtLatencyMs)
+                args += primaryOutputArgs(url: destURL, key: destKey, latencyMs: config.srtLatencyMs, pktSize: pktSize)
             }
             return args
         }
@@ -1544,7 +1581,7 @@ final class StreamManager: ObservableObject {
         // ffmpeg ignores it in the query string — it needs the dedicated option.
         // MPEG-TS is the container; tee is not used because per-target streamid
         // cannot be expressed, so backup/recording are skipped on SRT.
-        func primaryOutput() -> [String] { primaryOutputArgs(url: destURL, key: destKey, latencyMs: config.srtLatencyMs) }
+        func primaryOutput() -> [String] { primaryOutputArgs(url: destURL, key: destKey, latencyMs: config.srtLatencyMs, pktSize: pktSize) }
 
         let useTee = !isSRT && (!backup.isEmpty || recordingURL != nil)
         let snapshot = snapshotURL != nil
