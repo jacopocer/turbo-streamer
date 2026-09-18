@@ -45,6 +45,20 @@ enum LinkClient {
 
         /// The destination URL to put in the stream's config.
         var url: String { "\(`protocol`)://\(host):\(port)" }
+        /// Reachable only from the receiver's own network (it announced a private address).
+        var isLANOnly: Bool { LinkClient.isLANAddress(host) }
+    }
+
+    /// True for addresses that only work from inside the same network (RFC 1918, link-local,
+    /// loopback). Tailscale's 100.64/10 is deliberately NOT here: that is the remote path.
+    static func isLANAddress(_ host: String) -> Bool {
+        let p = host.split(separator: ".").compactMap { Int($0) }
+        guard p.count == 4 else { return host.lowercased() == "localhost" }
+        if p[0] == 10 || p[0] == 127 { return true }
+        if p[0] == 192, p[1] == 168 { return true }
+        if p[0] == 172, (16...31).contains(p[1]) { return true }
+        if p[0] == 169, p[1] == 254 { return true }
+        return false
     }
     private struct SessionState: Decodable { let name: String; let receivers: [Receiver] }
     private struct APIError: Decodable { let error: String }
