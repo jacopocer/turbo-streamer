@@ -196,6 +196,12 @@ struct ContentView: View {
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if LinkClient.isLANAddress(server.selectedAddress) {
+                Text("That is a LAN address: a streamer on another network can't reach it. Pick your Tailscale address (100.x) in the header if you have one, or have the streamer choose \u{201C}Use relay\u{201D} and set this feed to Relay.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             HStack {
                 Button(linking ? "Linking…" : "Link") { sendLink(key) }

@@ -436,6 +436,12 @@ struct StreamConfigCard: View {
                                     .font(.system(size: 10, design: .monospaced))
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1).truncationMode(.middle)
+                                if r.isLANOnly {
+                                    Text("LAN address — only reachable from that receiver's own network. From anywhere else, use the relay below.")
+                                        .font(.custom("SofiaPro", size: 10))
+                                        .foregroundStyle(.orange.opacity(0.85))
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
                             }
                             Spacer(minLength: 4)
                             Button("Use") {

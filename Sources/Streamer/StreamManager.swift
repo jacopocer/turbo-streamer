@@ -40,6 +40,7 @@ final class StreamManager: ObservableObject {
     private var tasks:          [UUID: Task<Void, Never>] = [:]
     private var logFileHandles: [UUID: FileHandle]        = [:]
     private var lastProgressAt: [UUID: Date]              = [:]
+    private var framesSeenThisRun: Set<UUID>              = []    // did the current ffmpeg run ever push a frame?
     private var slateProcesses: [UUID: Process]           = [:]
     private var slatePipes:     [UUID: Pipe]              = [:]
     private var overlayText:    [UUID: String]            = [:]   // live overlay text per stream
@@ -295,6 +296,7 @@ final class StreamManager: ObservableObject {
             statuses[id]        = nil
             stopFlags[id]       = nil
             lastProgressAt[id]  = nil
+            framesSeenThisRun.remove(id)
             logFileHandles[id]?.closeFile()
             logFileHandles[id]  = nil
             slatePipes.removeValue(forKey: id)?.fileHandleForReading.readabilityHandler = nil
@@ -495,6 +497,7 @@ final class StreamManager: ObservableObject {
 
         if sawProgress {
             lastProgressAt[id] = Date()
+            framesSeenThisRun.insert(id)
             // Frames resumed while reconnecting ⇒ we're back. Flip to live + chime.
             if case .reconnecting = statuses[id]?.phase {
                 statuses[id]?.phase = .running
@@ -608,8 +611,10 @@ final class StreamManager: ObservableObject {
 
                 let startedAt = Date()
                 lastProgressAt[id] = Date()
+                framesSeenThisRun.remove(id)
                 let exitCode = await runFFmpeg(record: record, bitrate: bitrate)
                 let ranFor   = Date().timeIntervalSince(startedAt)
+                let connected = framesSeenThisRun.contains(id)
 
                 if Task.isCancelled || stopFlags[id] == true { break }
 
@@ -620,8 +625,14 @@ final class StreamManager: ObservableObject {
                 }
 
                 // ── Adaptive bitrate ────────────────────────────────────────
+                // Only a run that actually pushed frames says anything about the link. A
+                // refused or unanswered connection is not congestion: lowering the bitrate
+                // can't reach a host that isn't there, and would bring the stream back at
+                // half quality once it is.
                 if record.config.adaptiveBitrate {
-                    if ranFor < 20, currentKbps > Self.floorKbps(originalKbps) {
+                    if !connected {
+                        appendLog("↻ Connection not established — bitrate stays at \(currentKbps)k.", to: id)
+                    } else if ranFor < 20, currentKbps > Self.floorKbps(originalKbps) {
                         currentKbps = max(Self.floorKbps(originalKbps), currentKbps * 7 / 10)
                         appendLog("📉 Unstable — lowering bitrate to \(currentKbps)k.", to: id)
                     } else if ranFor > 120, currentKbps < originalKbps {
@@ -661,6 +672,7 @@ final class StreamManager: ObservableObject {
             await stopSlate(id: id)
             if statuses[id]?.phase.isActive == true { statuses[id]?.phase = .stopped }
             lastProgressAt[id] = nil
+            framesSeenThisRun.remove(id)
             droppedStreams.remove(id)
             mutedStreams.remove(id)
             stdinPipes[id] = nil
