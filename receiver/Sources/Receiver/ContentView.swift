@@ -190,8 +190,8 @@ struct ContentView: View {
 
             urlRow("Publish here (Turbo Streamer)", server.ingestURL(key))
             urlRow("Publish low-latency (SRT)",      server.srtURL(key))
-            urlRow("OBS · Turbo Streamer (RTSP)",   server.rtspURL(key))
-            urlRow("TV · browser (HLS)",            server.hlsURL(key))
+            urlRow("OBS · this LAN (RTSP)",          server.rtspURL(key))
+            urlRow("Browser · this LAN (HLS)",      server.hlsURL(key), openable: true)
 
             if !key.relaySource.isEmpty {
                 HStack(spacing: 8) {
@@ -300,7 +300,7 @@ struct ContentView: View {
             .clipShape(Capsule())
     }
 
-    private func urlRow(_ label: String, _ value: String) -> some View {
+    private func urlRow(_ label: String, _ value: String, openable: Bool = false) -> some View {
         HStack(spacing: 8) {
             Text(label)
                 .font(.system(size: 10))
@@ -313,6 +313,13 @@ struct ContentView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 4)
+            if openable {
+                Button {
+                    if let url = URL(string: value) { NSWorkspace.shared.open(url) }
+                } label: { Image(systemName: "safari") }
+                .buttonStyle(.borderless)
+                .help("Open in the default browser")
+            }
             Button {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(value, forType: .string)
