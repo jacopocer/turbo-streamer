@@ -24,7 +24,6 @@ moq: no
 
 rtmp: yes
 rtmpAddress: 0.0.0.0:1935
-rtmps: no
 
 srt: yes
 srtAddress: 0.0.0.0:8890
