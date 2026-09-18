@@ -1592,7 +1592,11 @@ final class StreamManager: ObservableObject {
 
         // ── Encoder ────────────────────────────────────────────────────────
         // 10-bit survives only into HEVC main10; every other encoder gets 8-bit yuv420p.
-        let codec  = resolveCodec(for: config, fps: fpsInt, isSRT: isSRT)
+        var codec  = resolveCodec(for: config, fps: fpsInt, isSRT: isSRT)
+        // HEVC cannot travel over RTMP/FLV (the relay's TCP door, and every RTMP platform):
+        // ffmpeg's flv muxer rejects it. Only SRT/MPEG-TS carries HEVC, so clamp to
+        // hardware H.264 whenever the actual output isn't SRT.
+        if codec == .hevcHardware, !isSRT { codec = .h264Hardware }
         let tenBit = codec == .hevcHardware && config.inputType == .decklink && config.deckLinkTenBit
         func encoderArgs() -> [String] {
             let gop = "\(fpsInt * 2)"   // keyframe every 2 s (platform ABR expects it)
