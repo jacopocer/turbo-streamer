@@ -418,6 +418,7 @@ struct StreamStatus {
     var liveDrop: String?
     var inputWarning: String?     // themed freeze/black badge text, or nil — content issue, not a disconnect
     var currentDiagnostic: Diagnostic?   // plain-language translation of the latest failure (nil = all good)
+    var transportWarning: String?  // set when the transport fell back (e.g. relay SRT blocked → RTMP)
     var slowSamples = 0           // consecutive progress lines with speed < 0.95x (encoder falling behind)
 
     // Themed badge text for the freeze / black content detectors (Topolino voice).

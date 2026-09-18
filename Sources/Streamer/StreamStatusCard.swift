@@ -41,17 +41,10 @@ struct StreamStatusCard: View {
                     }
                     if status.phase.isActive { metricsLine }
                     if status.phase.isActive, let warning = status.inputWarning {
-                        HStack(spacing: 4) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.system(size: 9))
-                            Text(warning)
-                                .font(.custom("SofiaPro-SemiBold", size: 10))
-                        }
-                        .foregroundStyle(.orange)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
-                        .background(Color.orange.opacity(0.14))
-                        .clipShape(Capsule())
+                        warningBadge(warning)
+                    }
+                    if status.phase.isActive, let t = status.transportWarning {
+                        warningBadge(t)
                     }
                 }
 
@@ -260,6 +253,17 @@ struct StreamStatusCard: View {
     }
 
     @ViewBuilder
+    private func warningBadge(_ text: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 9))
+            Text(text).font(.custom("SofiaPro-SemiBold", size: 10))
+        }
+        .foregroundStyle(.orange)
+        .padding(.horizontal, 7).padding(.vertical, 2)
+        .background(Color.orange.opacity(0.14))
+        .clipShape(Capsule())
+    }
+
     private func metric(_ icon: String, _ text: String) -> some View {
         HStack(spacing: 3) {
             Image(systemName: icon)

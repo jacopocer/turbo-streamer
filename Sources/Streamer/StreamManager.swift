@@ -625,10 +625,12 @@ final class StreamManager: ObservableObject {
             if destURL.lowercased().hasPrefix("srt://") {
                 if await probeSRT(probeURL) {
                     appendLog("✓ SRT destination answers — UDP path is open.", to: id)
+                    statuses[id]?.transportWarning = nil
                 } else if !record.config.altRTMPURL.isEmpty {
                     tailnetRuns.remove(id)
                     destinationOverride[id] = (record.config.altRTMPURL, record.config.altStreamKey)
                     appendLog("⚠ SRT (UDP) to \(destURL) is blocked or unreachable from this network — sending RTMP to the relay instead: \(record.config.altRTMPURL).", to: id)
+                    statuses[id]?.transportWarning = "SRT (UDP) blocked — on RTMP fallback (higher latency, H.264 only)"
                 } else {
                     appendLog("⚠ SRT destination not answering — UDP may be blocked here, or the receiver isn't up. Will keep retrying; linking through the relay gives an RTMP fallback.", to: id)
                 }

@@ -206,8 +206,11 @@ struct ContentView: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
                     .frame(width: 150)
+                    if key.pullFromRelay, let t = server.relayTransport[key.key] {
+                        relayBadge(t)
+                    }
                     Text(key.pullFromRelay
-                         ? "Pulling from the relay (path \(key.relaySource.components(separatedBy: "read:").last?.components(separatedBy: ":").first ?? "")). The streamer must pick \u{201C}Use relay\u{201D}."
+                         ? "Pulling from the relay. The streamer must pick \u{201C}Use relay\u{201D}."
                          : "The streamer sends straight here: same LAN, Tailscale, or a forwarded UDP port.")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
@@ -297,6 +300,26 @@ struct ContentView: View {
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(Color.white.opacity(0.06))
             .clipShape(Capsule())
+    }
+
+    /// Shows which relay transport is live, and warns clearly when it fell back to RTMP.
+    @ViewBuilder
+    private func relayBadge(_ t: String) -> some View {
+        switch t {
+        case "srt":
+            Label("SRT", systemImage: "bolt.fill").font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.green).help("Best quality: low latency, HEVC-capable.")
+        case "rtmp":
+            Label("RTMP fallback", systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 9, weight: .bold)).foregroundStyle(.orange)
+                .help("SRT (UDP) was blocked on this network — using RTMP over TCP. Higher latency, H.264 only.")
+        case "connecting":
+            Label("connecting…", systemImage: "hourglass").font(.system(size: 9))
+                .foregroundStyle(.secondary)
+        default:
+            Label("no relay", systemImage: "xmark.circle").font(.system(size: 9))
+                .foregroundStyle(.orange)
+        }
     }
 
     private func urlRow(_ label: String, _ value: String, openable: Bool = false) -> some View {
