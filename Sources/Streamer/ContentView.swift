@@ -152,8 +152,8 @@ struct WobblingIcon: View {
         Image(nsImage: NSApplication.shared.applicationIconImage)
             .resizable()
             .interpolation(.high)
-            .frame(width: 36, height: 36)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .frame(width: 54, height: 54)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     @ViewBuilder

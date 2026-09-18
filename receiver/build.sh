@@ -26,6 +26,14 @@ if [ ! -x vendor/mediamtx ]; then
     ./fetch-mediamtx.sh
 fi
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$BUNDLE/Contents/Resources/AppIcon.icns" && echo "Bundled app icon" || true
+# Fonts (shared with Turbo Streamer — Bello Pro for the title, Sofia Pro for the rest).
+if [ -d "../Resources/Fonts" ]; then
+    mkdir -p "$BUNDLE/Contents/Resources/Fonts"
+    cp ../Resources/Fonts/*.otf "$BUNDLE/Contents/Resources/Fonts/" 2>/dev/null || true
+    cp ../Resources/Fonts/*.ttf "$BUNDLE/Contents/Resources/Fonts/" 2>/dev/null || true
+    echo "Bundled $(ls "$BUNDLE/Contents/Resources/Fonts" | wc -l | tr -d ' ') fonts"
+fi
+
 cp vendor/mediamtx "$BUNDLE/Contents/Resources/bin/mediamtx"
 chmod +x "$BUNDLE/Contents/Resources/bin/mediamtx"
 [ -f vendor/mediamtx.LICENSE ] && cp vendor/mediamtx.LICENSE "$BUNDLE/Contents/Resources/" || true
