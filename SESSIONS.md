@@ -14,9 +14,10 @@ Multiple AI chat sessions edit this repo at the same time. **Read this file befo
 ## LOG (newest first)
 
 ### 🔄 IN PROGRESS
-- `comet-1` — Embedded Tailscale (tsnet helper `net/turbo-net`, join keys minted by turbolink `/v1/tailnet/key`), Receiver listens on the tailnet, Streamer dials through it. Files: `net/`, `link-server/index.js` + unit, `Sources/Streamer/TurboNet.swift` (new), `StreamManager.swift`, `receiver/Sources/Receiver/TurboNet.swift` (new), `ServerManager.swift`, `ContentView.swift`, both `build.sh`, docs. ETA: this session.
+_(none)_
 
 ### ✅ DONE (not yet folded into HANDOFF.md)
+- `comet-1` — Turbo network: Tailscale built into both apps via a tsnet helper (`net/turbo-net`, universal, bundled by both build.sh), `TurboNet.swift` in both apps, Receiver listens on the tailnet and announces its 100.x, Streamer tunnels SRT to 100.x destinations (pkt_size 1200), turbolink `/v1/tailnet/key` mints join keys (token via `tailnet.env`). Header status + one-time login fallback. Docs. Not exercised end to end (needs the owner's tailnet). Commit `4acda0a`.
 - `comet-1` — Relay option B (turbolink relay secrets + `/v1/auth`, MediaMTX relay deploy assets), Streamer "Use relay" + SRT pre-flight probe with RTMP fallback + network passthrough + srt streamid input + encoder-behind diagnostic + slate on SRT; Receiver Direct/Relay per feed, MoQ off. Verified locally end to end; box deploy `deploy-relay.sh` owner-run. Docs updated. Both apps rebuilt + installed. Commit `39c3678`.
 - `comet-1` — DeckLink Format/Connector/10-bit controls + per-stream Codec picker (4K60: HEVC hw to SRT, x264 to platforms; h264 hw measured 0.88× on M2 Pro), Match source for explicit DeckLink formats; bundle renamed `Turbo Streamer.app`. `Models.swift`, `StreamManager.swift`, `StreamConfigCard.swift`, build scripts, docs. Both apps rebuilt + installed. Commit `56438ca`. Not run against a physical DeckLink.
 - `comet-1` — **Turbo Receiver** (new app, `receiver/`): MediaMTX ingest + RTSP/RTMP/HLS fan-out, NDI output for BirdDog decoders, HLS served as mpegts for TVs. Commits `7970ba3`, `43ada29`, `a641cc9`. Folded into HANDOFF.
