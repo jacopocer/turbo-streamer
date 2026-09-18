@@ -141,7 +141,7 @@ final class LocalServer: ObservableObject {
         rtspAddress: 0.0.0.0:\(LocalPorts.rtsp)
         hls: yes
         hlsAddress: 0.0.0.0:\(LocalPorts.hls)
-        hlsVariant: mpegts
+        hlsVariant: fmp4
         hlsAlwaysRemux: yes
         webrtc: no
         srt: yes

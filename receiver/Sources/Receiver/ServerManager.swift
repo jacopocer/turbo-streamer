@@ -122,27 +122,12 @@ final class ServerManager: ObservableObject {
             return
         }
         guard !keys[i].relaySource.isEmpty else { return }
-        appendLog("↓ \(k.name): pulling from the relay over SRT.")
-        let key = k.key, name = k.name
-        let srt = keys[i].relaySource, rtmp = keys[i].relaySourceRTMP
-        if isRunning {
-            relayFallbackTasks[key] = Task { [weak self] in
-                guard let self else { return }
-                await self.applySource(key, srt)
-                // SRT is UDP: venue and office networks block it more often than TCP.
-                // If the path isn't pulling within ~8 s and we have an RTMP URL, switch to
-                // it — same stream, over TCP 1935, which gets through almost anywhere.
-                guard !rtmp.isEmpty else { return }
-                for _ in 0..<8 {
-                    try? await Task.sleep(for: .seconds(1))
-                    if Task.isCancelled { return }
-                    if self.statuses[key]?.ready == true { return }   // SRT is working, leave it
-                }
-                if Task.isCancelled { return }
-                self.appendLog("↓ \(name): SRT didn't come up (UDP likely blocked) — switching to RTMP over TCP.")
-                await self.applySource(key, rtmp)
-            }
-        }
+        let key = k.key
+        // Prefer RTMP over TCP for the relay: reliable where UDP is blocked. SRT only when
+        // there is no RTMP URL (older sessions).
+        let src = keys[i].relaySourceRTMP.isEmpty ? keys[i].relaySource : keys[i].relaySourceRTMP
+        appendLog("↓ \(k.name): pulling from the relay over \(keys[i].relaySourceRTMP.isEmpty ? "SRT" : "RTMP").")
+        if isRunning, !src.isEmpty { Task { await self.applySource(key, src) } }
     }
 
     private func applySource(_ key: String, _ source: String) async {
@@ -273,7 +258,7 @@ final class ServerManager: ObservableObject {
         rtspAddress: 0.0.0.0:\(Ports.rtsp)
         hls: yes
         hlsAddress: 0.0.0.0:\(Ports.hls)
-        hlsVariant: mpegts
+        hlsVariant: fmp4
         hlsAlwaysRemux: yes
         webrtc: no
         srt: yes
@@ -290,7 +275,13 @@ final class ServerManager: ObservableObject {
         else {
             for k in keys {
                 yml += "  \(k.key):\n"
-                if k.pullFromRelay, !k.relaySource.isEmpty { yml += "    source: \(k.relaySource)\n" }
+                // Relay pull defaults to RTMP over TCP: the relay is used exactly when a
+                // network is hostile, and those block SRT's UDP (port 8890) far more often
+                // than TCP 1935. SRT stays available for the direct path, not the relay.
+                if k.pullFromRelay {
+                    let src = k.relaySourceRTMP.isEmpty ? k.relaySource : k.relaySourceRTMP
+                    if !src.isEmpty { yml += "    source: \(src)\n" }
+                }
             }
         }
 
