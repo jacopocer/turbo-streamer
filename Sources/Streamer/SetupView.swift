@@ -167,6 +167,10 @@ struct SetupView: View {
                     switch net.state {
                     case .up:
                         Text("Connected as \(net.ip) · \(net.hostname)").font(.system(size: 11, design: .monospaced))
+                        Spacer()
+                        Button("Unlink account") { Task { await net.unlinkAccount() } }
+                            .buttonStyle(.bordered).controlSize(.small)
+                            .help("Forget this login and get a fresh login link (e.g. wrong account)")
                     case .needsLogin:
                         Button("Open login page") { net.openLogin() }.buttonStyle(.borderedProminent).controlSize(.small)
                         Text("One time, then it remembers.").font(.custom("SofiaPro", size: 11)).foregroundStyle(.secondary)
