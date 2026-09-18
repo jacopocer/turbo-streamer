@@ -3,6 +3,7 @@ import AppKit
 
 struct ContentView: View {
     @EnvironmentObject var server: ServerManager
+    @EnvironmentObject var updater: Updater
     @State private var newKeyName = ""
     @State private var showLog = false
     @State private var linkingKey: UUID? = nil     // feed whose pairing popover is open
@@ -354,6 +355,11 @@ struct ContentView: View {
             Button(showLog ? "Hide log" : "Show log") { showLog.toggle() }
                 .buttonStyle(.borderless)
                 .font(.system(size: 11))
+            Text(updater.displayVersion)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .help("Version and build. Click to check for updates.")
+                .onTapGesture { Task { await updater.check(silent: false) } }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)

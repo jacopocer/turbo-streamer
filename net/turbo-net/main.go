@@ -162,7 +162,12 @@ func main() {
 
 // listen: tailnet :port → local `to`
 func listenTunnel(ctx context.Context, srv *tsnet.Server, id string, port int, to string) (func(), error) {
-	pc, err := srv.ListenPacket("udp", fmt.Sprintf(":%d", port))
+	// tsnet's ListenPacket needs the node's own tailnet IP, not a bare ":port".
+	ip4, _ := srv.TailscaleIPs()
+	if !ip4.IsValid() {
+		return nil, fmt.Errorf("no tailnet IP yet")
+	}
+	pc, err := srv.ListenPacket("udp", netip.AddrPortFrom(ip4, uint16(port)).String())
 	if err != nil {
 		return nil, fmt.Errorf("listen on tailnet: %w", err)
 	}

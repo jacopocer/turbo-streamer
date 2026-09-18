@@ -140,8 +140,8 @@ cat > "$BUNDLE/Contents/Info.plist" <<'PLIST'
     <key>CFBundleName</key><string>Turbo Streamer</string>
     <key>CFBundleDisplayName</key><string>Turbo Streamer</string>
     <key>CFBundleIdentifier</key><string>com.jacopocerati.turbostreamer</string>
-    <key>CFBundleVersion</key><string>2.0</string>
-    <key>CFBundleShortVersionString</key><string>2.0</string>
+    <key>CFBundleVersion</key><string>__BUILD__</string>
+    <key>CFBundleShortVersionString</key><string>__SHORT__</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleExecutable</key><string>Streamer</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
@@ -157,6 +157,12 @@ cat > "$BUNDLE/Contents/Info.plist" <<'PLIST'
 PLIST
 
 echo ""
+# Version + build stamped from the VERSION file and git (single source of truth).
+SHORT_VERSION="$(cat ./VERSION 2>/dev/null || echo 3.0)"
+BUILD_NUMBER="$(git -C . rev-list --count HEAD 2>/dev/null || echo 0)"
+/usr/bin/sed -i '' "s/__SHORT__/$SHORT_VERSION/; s/__BUILD__/$BUILD_NUMBER/" "$BUNDLE/Contents/Info.plist"
+echo "🏷  Version $SHORT_VERSION (build $BUILD_NUMBER)"
+
 echo "✍️   Code-signing (ad-hoc)…"
 chmod -R u+rw "$BUNDLE"
 xattr -rc "$BUNDLE"

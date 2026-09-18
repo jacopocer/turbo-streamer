@@ -6,7 +6,7 @@ struct ReceiverApp: App {
 
     var body: some Scene {
         WindowGroup("Turbo Receiver") {
-            ContentView()
+            RootView()
                 .environmentObject(server)
                 .frame(minWidth: 760, minHeight: 540)
                 .preferredColorScheme(.dark)
