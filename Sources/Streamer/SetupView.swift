@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SetupView: View {
     @EnvironmentObject var manager: StreamManager
+    @EnvironmentObject var updater: Updater
     @State private var streamCount: Int = 1
     @State private var showSaveProfile = false
     @State private var newProfileName  = ""
@@ -76,6 +77,11 @@ struct SetupView: View {
                         .font(.custom("SofiaPro", size: 12))
                         .foregroundStyle(.orange)
                 }
+                Text(updater.displayVersion)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(0.3))
+                    .help("Version and build. Click to check for updates.")
+                    .onTapGesture { Task { await updater.check(silent: false) } }
                 Spacer()
                 Button {
                     if manager.anyPreviewing {

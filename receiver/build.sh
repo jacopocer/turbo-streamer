@@ -92,8 +92,8 @@ cat > "$BUNDLE/Contents/Info.plist" <<PLIST
     <key>CFBundleIdentifier</key><string>com.indigital.turboreceiver</string>
     <key>CFBundleExecutable</key><string>${APP_NAME}</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.1</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleShortVersionString</key><string>__SHORT__</string>
+    <key>CFBundleVersion</key><string>__BUILD__</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSAppTransportSecurity</key>
@@ -103,6 +103,12 @@ cat > "$BUNDLE/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+# Version + build stamped from the VERSION file and git (single source of truth).
+SHORT_VERSION="$(cat ../VERSION 2>/dev/null || echo 3.0)"
+BUILD_NUMBER="$(git -C .. rev-list --count HEAD 2>/dev/null || echo 0)"
+/usr/bin/sed -i '' "s/__SHORT__/$SHORT_VERSION/; s/__BUILD__/$BUILD_NUMBER/" "$BUNDLE/Contents/Info.plist"
+echo "🏷  Version $SHORT_VERSION (build $BUILD_NUMBER)"
 
 echo "✍️   Code-signing (ad-hoc)…"
 codesign --force --deep -s - "$BUNDLE" 2>&1 | sed 's/^/    /' || true

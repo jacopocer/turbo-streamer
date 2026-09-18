@@ -10,7 +10,7 @@ struct TurboStreamerApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
                 .environmentObject(manager)
                 .preferredColorScheme(.dark)
         }

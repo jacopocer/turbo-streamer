@@ -26,6 +26,7 @@ const DATA = process.env.TURBOLINK_DATA || path.join(__dirname, 'data');
 const STORE = path.join(DATA, 'sessions.json');
 const TTL_MS = Number(process.env.TURBOLINK_TTL_HOURS || 24) * 3600 * 1000;
 const MAX_RECEIVERS = 32;
+const DOWNLOADS = process.env.TURBOLINK_DOWNLOADS || path.join(__dirname, '..', 'downloads');
 
 // Public relay coordinates handed to both apps. Host must resolve straight to the
 // box (no Cloudflare proxy: SRT is UDP, RTMP is raw TCP).
@@ -145,6 +146,27 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && url.pathname === '/health') {
       return json(res, 200, { ok: true, sessions: sessions.size });
+    }
+
+    // GET /v1/appcast — the self-update manifest for both apps.
+    if (req.method === 'GET' && url.pathname === '/v1/appcast') {
+      try {
+        const raw = fs.readFileSync(path.join(DOWNLOADS, 'appcast.json'));
+        res.writeHead(200, { 'content-type': 'application/json', 'content-length': raw.length,
+                             'cache-control': 'no-cache' });
+        return res.end(raw);
+      } catch { return json(res, 404, { error: 'no appcast published' }); }
+    }
+
+    // GET /downloads/<file> — the app zips. Sanitised: one path segment, .zip only.
+    if (req.method === 'GET' && parts[0] === 'downloads' && parts.length === 2) {
+      const name = parts[1];
+      if (!/^[A-Za-z0-9._-]+\.zip$/.test(name)) return json(res, 400, { error: 'bad name' });
+      const file = path.join(DOWNLOADS, name);
+      if (!file.startsWith(path.resolve(DOWNLOADS) + path.sep)) return json(res, 400, { error: 'bad path' });
+      let st; try { st = fs.statSync(file); } catch { return json(res, 404, { error: 'not found' }); }
+      res.writeHead(200, { 'content-type': 'application/zip', 'content-length': st.size });
+      return fs.createReadStream(file).pipe(res);
     }
 
     // POST /v1/session — streamer opens a session
