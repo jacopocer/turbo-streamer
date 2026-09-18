@@ -46,6 +46,11 @@ final class StreamManager: ObservableObject {
     /// The app's own Tailscale node (see TurboNet). Started at launch, non-blocking.
     let turboNet = TurboNet(appTag: "streamer")
     @Published private(set) var networkLog: [String] = []
+
+    /// Embedded LAN server (MediaMTX + NDI): serve the app's own stream on the local
+    /// network, for the all-local case where nothing needs to leave the LAN.
+    let localServer = LocalServer()
+    @Published var localPublishEnabled = false { didSet { UserDefaults.standard.set(localPublishEnabled, forKey: "TurboStreamer.localPublish") } }
     private var slateProcesses: [UUID: Process]           = [:]
     private var slatePipes:     [UUID: Pipe]              = [:]
     private var overlayText:    [UUID: String]            = [:]   // live overlay text per stream
@@ -79,6 +84,7 @@ final class StreamManager: ObservableObject {
             ffmpegPath = "/usr/local/bin/ffmpeg"
         }
 
+        localPublishEnabled = UserDefaults.standard.bool(forKey: "TurboStreamer.localPublish")
         turboNet.log = { [weak self] line in
             guard let self else { return }
             self.networkLog.append(line)
@@ -129,6 +135,7 @@ final class StreamManager: ObservableObject {
         for p in previewProcesses.values where p.isRunning { kill(p.processIdentifier, SIGKILL) }
         for p in slateProcesses.values   where p.isRunning { kill(p.processIdentifier, SIGKILL) }
         registry.killAll()
+        localServer.stop()   // don't orphan the embedded mediamtx / NDI
     }
 
     /// Keep the Mac from idle-sleeping while any stream is live; release when idle.
@@ -253,24 +260,32 @@ final class StreamManager: ObservableObject {
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         let timestamp = formatter.string(from: now)
 
-        for config in configs {
-            let safeName = config.name
-                .replacingOccurrences(of: "/", with: "-")
-                .replacingOccurrences(of: ":", with: "-")
-            let logURL = logsDir.appendingPathComponent("\(timestamp)_\(safeName).log")
-
-            let record = RunningStreamRecord(config: config, startedAt: now, logFileURL: logURL)
-            runningStreams.append(record)
-            statuses[record.id]   = StreamStatus()
-            stopFlags[record.id]  = false
-            overlayText[record.id] = config.overlay.text   // seed live overlay text
-
-            FileManager.default.createFile(atPath: logURL.path, contents: nil)
-            logFileHandles[record.id] = FileHandle(forWritingAtPath: logURL.path)
-
-            spawnTask(for: record)
+        if localPublishEnabled {
+            localServer.setPaths(configs.map { (localPathName(for: $0), $0.name) })
+            if !localServer.isRunning { localServer.start() }
         }
+        for config in configs { launch(config, at: now, timestamp: timestamp) }
         refreshPowerAssertion()   // keep the Mac awake while live
+    }
+
+    /// Starts one config as a new running instance. Shared by startStreams and by a
+    /// LAN-publish toggle that restarts live streams.
+    @discardableResult
+    private func launch(_ config: StreamConfig, at now: Date = Date(), timestamp: String? = nil) -> UUID {
+        let ts: String
+        if let timestamp { ts = timestamp }
+        else { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd_HH-mm-ss"; ts = f.string(from: now) }
+        let safeName = config.name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        let logURL = logsDirectory().appendingPathComponent("\(ts)_\(safeName).log")
+        let record = RunningStreamRecord(config: config, startedAt: now, logFileURL: logURL)
+        runningStreams.append(record)
+        statuses[record.id]   = StreamStatus()
+        stopFlags[record.id]  = false
+        overlayText[record.id] = config.overlay.text
+        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        logFileHandles[record.id] = FileHandle(forWritingAtPath: logURL.path)
+        spawnTask(for: record)
+        return record.id
     }
 
     func stopStream(id: UUID) {
@@ -1067,9 +1082,10 @@ final class StreamManager: ObservableObject {
 
     /// Tee slaves. The primary keeps the default onfail=abort (a primary drop ends ffmpeg
     /// and triggers reconnect); backup and recording use onfail=ignore.
-    private func teeTargets(dest: String, backup: String, recordingURL: URL?) -> [String] {
+    private func teeTargets(dest: String, backup: String, recordingURL: URL?, local: String? = nil) -> [String] {
         var targets = ["[f=flv]\(dest)"]
         if !backup.isEmpty        { targets.append("[f=flv:onfail=ignore]\(backup)") }
+        if let local              { targets.append("[f=flv:onfail=ignore]\(local)") }
         if let rec = recordingURL { targets.append("[f=mpegts:onfail=ignore]\(rec.path)") }
         return targets
     }
@@ -1433,6 +1449,41 @@ final class StreamManager: ObservableObject {
         return a + ["-i", url]
     }
 
+    /// A stable, MediaMTX-safe path name for a stream on the local server: a slug of its
+    /// name plus a short id, so it reads well and never collides.
+    func localPathName(for config: StreamConfig) -> String {
+        let slug = config.name.lowercased().map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        let id = String(config.id.uuidString.prefix(8)).lowercased()
+        return (slug.isEmpty ? "stream" : String(slug.prefix(24))) + "-" + id
+    }
+
+    /// The RTMP URL the app publishes a stream to on the embedded server.
+    private func localDestination(for config: StreamConfig) -> String {
+        "rtmp://127.0.0.1:\(LocalPorts.rtmp)/\(localPathName(for: config))"
+    }
+
+    /// Turns LAN publishing on/off. Starts/stops the embedded server, registers the paths,
+    /// and restarts any running streams so they (stop) publishing to it.
+    func setLocalPublish(_ on: Bool) {
+        guard on != localPublishEnabled else { return }
+        localPublishEnabled = on
+        let liveConfigs = runningStreams.filter { statuses[$0.id]?.phase.isActive == true }.map { $0.config }
+        if on {
+            localServer.setPaths(configs.map { (localPathName(for: $0), $0.name) })
+            localServer.start()
+        }
+        // Restart live streams to pick up (or drop) the local destination.
+        for c in liveConfigs { stopStream(id: c.id) }
+        if !liveConfigs.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                guard let self else { return }
+                for c in liveConfigs { self.launch(c) }
+            }
+        }
+        if !on { localServer.stop() }
+    }
+
     private func resolvedOutputFPS(for config: StreamConfig, captureFPS: String?) -> String {
         guard config.fpsMatchSource else { return config.fps }
         // DeckLink: the rate is known only when a format is chosen explicitly.
@@ -1470,11 +1521,22 @@ final class StreamManager: ObservableObject {
         let outFPS     = outputFPS ?? config.fps
         let fpsInt     = Int((Double(outFPS) ?? 30).rounded())
         // Pre-flight may have swapped the destination (SRT blocked → the relay's RTMP door).
-        let destURL    = destination?.url ?? config.rtmpURL
-        let destKey    = destination?.key ?? config.streamKey
-        let isSRT      = destURL.lowercased().hasPrefix("srt://")
-        let dest       = "\(destURL)/\(destKey)"
+        // LAN publishing serves the feed locally; when on, the local server is a target too.
+        let platformURL = destination?.url ?? config.rtmpURL
+        let platformKey = destination?.key ?? config.streamKey
+        let platformSRT = platformURL.lowercased().hasPrefix("srt://")
+        let localTarget = localPublishEnabled ? localDestination(for: config) : nil
+        // With an SRT platform we can't tee, so LAN publishing takes over the primary
+        // (the all-local case). With an RTMP platform, LAN is added as an extra tee branch.
+        let destURL: String, destKey: String, isSRT: Bool
+        if let lt = localTarget, platformSRT {
+            destURL = lt; destKey = ""; isSRT = false
+        } else {
+            destURL = platformURL; destKey = platformKey; isSRT = platformSRT
+        }
+        let dest       = destKey.isEmpty ? destURL : "\(destURL)/\(destKey)"
         let backup     = config.backupRTMPURL.trimmingCharacters(in: .whitespaces)
+        let localTee   = (localTarget != nil && !platformSRT && destURL != localTarget) ? localTarget : nil
 
         var args: [String]
 
@@ -1583,7 +1645,7 @@ final class StreamManager: ObservableObject {
         // cannot be expressed, so backup/recording are skipped on SRT.
         func primaryOutput() -> [String] { primaryOutputArgs(url: destURL, key: destKey, latencyMs: config.srtLatencyMs, pktSize: pktSize) }
 
-        let useTee = !isSRT && (!backup.isEmpty || recordingURL != nil)
+        let useTee = !isSRT && (!backup.isEmpty || recordingURL != nil || localTee != nil)
         let snapshot = snapshotURL != nil
 
         if useTee || snapshot {
@@ -1601,7 +1663,7 @@ final class StreamManager: ObservableObject {
             // Primary uses default onfail=abort → a primary drop ends ffmpeg and
             // triggers reconnect. Backup & recording use onfail=ignore.
             if useTee {
-                args += ["-f", "tee", teeTargets(dest: dest, backup: backup, recordingURL: recordingURL).joined(separator: "|")]
+                args += ["-f", "tee", teeTargets(dest: dest, backup: backup, recordingURL: recordingURL, local: localTee).joined(separator: "|")]
             } else {
                 args += primaryOutput()
             }
