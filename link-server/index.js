@@ -202,7 +202,7 @@ const server = http.createServer(async (req, res) => {
       if (!r.ok) {
         const detail = (await r.text()).slice(0, 200);
         console.error('tailnet key mint failed:', r.status, detail);
-        return json(res, 502, { error: `tailnet key refused (${r.status})` });
+        return json(res, 502, { error: `tailnet key refused (${r.status})`, detail });
       }
       const k = await r.json();
       return json(res, 200, { authKey: k.key, expiresIn: TS.keyTTL, tag: TS.tag });

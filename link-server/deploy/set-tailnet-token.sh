@@ -34,7 +34,10 @@ ssh_do "systemctl daemon-reload && systemctl restart turbolink-api"
 sleep 2
 
 echo "== verify (should mint a key, not 503) =="
+body="$(curl -s -m 15 -X POST "$BASE_URL/v1/tailnet/key" -H 'content-type: application/json' -d '{"app":"probe","host":"probe"}')"
 code="$(curl -s -o /dev/null -w '%{http_code}' -m 15 -X POST "$BASE_URL/v1/tailnet/key" -H 'content-type: application/json' -d '{"app":"probe","host":"probe"}')"
 if [ "$code" = "200" ]; then echo "OK — turbolink mints join keys now."
-else echo "Got HTTP $code. If 401/403, the token or tailnet is wrong. If 503, the token wasn't read — check the unit's EnvironmentFile."; fi
+else echo "Got HTTP $code: $body"
+     echo "  502 = Tailscale rejected the call (see the detail above; wrong tailnet name → use '-', or a token lacking key-write scope)."
+     echo "  401/403 = token wrong. 503 = token not read."; fi
 echo "== done =="
