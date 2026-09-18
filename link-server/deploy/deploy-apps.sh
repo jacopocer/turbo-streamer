@@ -53,6 +53,12 @@ ssh_do "mkdir -p /opt/turbolink/downloads"
 scp -i "$SSH_KEY" "$WORK/$STREAMER_ZIP" "$WORK/$RECEIVER_ZIP" "$WORK/appcast.json" "$HOST:/opt/turbolink/downloads/"
 ssh_do "chown -R www-data:www-data /opt/turbolink/downloads"
 
+# The appcast/download routes live in turbolink; push the current code and restart
+# it, so a box running an older turbolink starts serving them.
+scp -i "$SSH_KEY" link-server/index.js "$HOST:/opt/turbolink/api/index.js"
+ssh_do "chown www-data:www-data /opt/turbolink/api/index.js && systemctl restart turbolink-api"
+sleep 2
+
 echo "== verify =="
 curl -fsS "$BASE_URL/v1/appcast" | grep -o '"build": [0-9]*' | head -1
 echo "streamer zip $(du -h "$WORK/$STREAMER_ZIP" | cut -f1), receiver zip $(du -h "$WORK/$RECEIVER_ZIP" | cut -f1)"
