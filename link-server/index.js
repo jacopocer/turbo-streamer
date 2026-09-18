@@ -176,6 +176,7 @@ const server = http.createServer(async (req, res) => {
       let code; do { code = newCode(); } while (sessions.has(code));
       const s = { code, secret: newSecret(), name: str(body.name) || 'Feed',
                   createdAt: Date.now(), lastActive: Date.now(), receivers: [],
+                  transport: null,   // {mode:'direct'|'relay-srt'|'relay-rtmp', detail, at}
                   relay: { publishPass: newSecret(), readPass: newSecret() } };
       sessions.set(code, s);
       save();
@@ -206,6 +207,31 @@ const server = http.createServer(async (req, res) => {
       }
       const k = await r.json();
       return json(res, 200, { authKey: k.key, expiresIn: TS.keyTTL, tag: TS.tag });
+    }
+
+    // POST /v1/session/:code/transport — the streamer reports the transport it settled on,
+    // so receivers can align (publisher mode for a direct publish, pull for the relay).
+    if (req.method === 'POST' && parts[0] === 'v1' && parts[1] === 'session' && parts[3] === 'transport') {
+      const s = sessions.get(String(parts[2] || '').toUpperCase());
+      if (!s) return json(res, 404, { error: 'unknown or expired code' });
+      const given = req.headers['x-secret'] || url.searchParams.get('secret');
+      if (!secretOk(s, given)) return json(res, 403, { error: 'bad secret' });
+      const body = await readBody(req);
+      const mode = ['direct', 'relay-srt', 'relay-rtmp'].includes(body.mode) ? body.mode : 'direct';
+      s.transport = { mode, detail: str(body.detail, 80), at: Date.now() };
+      touch(s); save();
+      return json(res, 200, { ok: true });
+    }
+
+    // GET /v1/session/:code/transport — receivers poll this (code only, no secret) to learn
+    // whether the streamer is publishing directly (they wait) or via the relay (they pull).
+    // Only the transport mode is exposed here, never the receiver list.
+    if (req.method === 'GET' && parts[0] === 'v1' && parts[1] === 'session' && parts[3] === 'transport') {
+      const s = sessions.get(String(parts[2] || '').toUpperCase());
+      if (!s) return json(res, 404, { error: 'unknown or expired code' });
+      touch(s);
+      return json(res, 200, { mode: s.transport?.mode || null, detail: s.transport?.detail || '',
+                              at: s.transport?.at || 0 });
     }
 
     // POST /v1/auth — MediaMTX (the relay, on this box) asks whether an action is
@@ -266,6 +292,7 @@ const server = http.createServer(async (req, res) => {
       if (!secretOk(s, given)) return json(res, 403, { error: 'bad secret' });
       touch(s);
       return json(res, 200, { code: s.code, name: s.name, receivers: s.receivers,
+                              transport: s.transport || null,
                               expiresAt: new Date(Math.max(s.createdAt, s.lastActive || 0) + TTL_MS).toISOString(),
                               relay: s.relay ? relayForStreamer(s) : null });
     }

@@ -52,6 +52,20 @@ enum LinkClient {
         }
     }
 
+    struct Transport: Decodable { let mode: String?; let detail: String? }
+
+    /// Polls which transport the streamer settled on (code only, no secret). nil mode means
+    /// the streamer hasn't reported yet.
+    static func transport(code: String) async -> Transport? {
+        let clean = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard let url = URL(string: "\(baseURL)/v1/session/\(clean)/transport") else { return nil }
+        var req = URLRequest(url: url, timeoutInterval: 10)
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return try? JSONDecoder().decode(Transport.self, from: data)
+    }
+
     /// Publishes where this receiver can be reached, under the streamer's code.
     static func join(code: String,
                      label: String,

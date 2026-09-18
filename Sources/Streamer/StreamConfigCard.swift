@@ -444,8 +444,30 @@ struct StreamConfigCard: View {
                                 }
                             }
                             Spacer(minLength: 4)
-                            Button("Use") {
+                            if let relay = session.relay {
+                                Button("Use (auto)") {
+                                    config.rtmpPreset      = .custom
+                                    config.autoPair        = true
+                                    config.pairDirectURL   = r.url        // srt://<receiver>:8890
+                                    config.pairDirectKey   = r.streamKey
+                                    config.pairRelaySRTURL = relay.srtURL
+                                    config.pairRelaySRTKey = relay.streamKey
+                                    config.pairRelayRTMPURL = relay.rtmpURL
+                                    config.pairRelayRTMPKey = relay.rtmpKey
+                                    config.pairCode        = session.code
+                                    config.pairSecret      = session.secret
+                                    config.srtLatencyMs    = r.latencyMs
+                                    // keep rtmpURL sane for the validation hint
+                                    config.rtmpURL         = r.url
+                                    config.streamKey       = r.streamKey
+                                    showLink = false
+                                }
+                                .buttonStyle(.borderedProminent).controlSize(.small)
+                                .help("Automatic: tries the direct path first, then the relay over SRT, then RTMP — falling back on its own and warning you which is live.")
+                            }
+                            Button("Direct only") {
                                 config.rtmpPreset   = .custom
+                                config.autoPair     = false
                                 config.rtmpURL      = r.url
                                 config.streamKey    = r.streamKey
                                 config.srtLatencyMs = r.latencyMs

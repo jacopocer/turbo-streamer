@@ -197,21 +197,25 @@ struct ContentView: View {
                     Text("Receive")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.secondary)
-                    Picker("", selection: Binding(
-                        get: { key.pullFromRelay },
-                        set: { server.setPullFromRelay(key, $0) })) {
-                        Text("Direct").tag(false)
-                        Text("Relay").tag(true)
+                    if key.linkCode.isEmpty {
+                        Picker("", selection: Binding(
+                            get: { key.pullFromRelay },
+                            set: { server.setPullFromRelay(key, $0) })) {
+                            Text("Direct").tag(false)
+                            Text("Relay").tag(true)
+                        }
+                        .pickerStyle(.segmented).labelsHidden().frame(width: 150)
+                    } else {
+                        Label("Automatic", systemImage: "wand.and.stars")
+                            .font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                            .help("This feed follows the streamer's transport automatically.")
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 150)
                     if key.pullFromRelay, let t = server.relayTransport[key.key] {
                         relayBadge(t)
                     }
-                    Text(key.pullFromRelay
-                         ? "Pulling from the relay. The streamer must pick \u{201C}Use relay\u{201D}."
-                         : "The streamer sends straight here: same LAN, Tailscale, or a forwarded UDP port.")
+                    Text(key.linkCode.isEmpty
+                         ? (key.pullFromRelay ? "Pulling from the relay." : "The streamer sends straight here.")
+                         : "Follows the streamer: direct when it can, relay otherwise.")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -282,10 +286,8 @@ struct ContentView: View {
                                                   port: Ports.srt,
                                                   streamKey: key.key,
                                                   latencyMs: 120)
-                if let relay = r.relay { server.setRelaySource(key, relay.source, rtmp: relay.sourceRTMP ?? "") }
-                linkStatus = r.relay == nil
-                    ? "✓ Linked to \(r.sessionName)"
-                    : "✓ Linked to \(r.sessionName). If the streamer uses the relay, set this feed to Relay."
+                if let relay = r.relay { server.setRelaySource(key, relay.source, rtmp: relay.sourceRTMP ?? "", code: code) }
+                linkStatus = "✓ Linked to \(r.sessionName) — this feed now follows the streamer automatically."
             } catch {
                 linkStatus = "✗ \(error.localizedDescription)"
             }

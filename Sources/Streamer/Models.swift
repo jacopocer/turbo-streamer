@@ -210,6 +210,16 @@ struct StreamConfig: Identifiable, Codable {
     var srtLatencyMs: Int             = 120  // SRT receiver buffer; the latency/robustness trade-off
     var altRTMPURL: String            = ""   // relay's RTMP door: pre-flight switches to it when SRT (UDP) is blocked
     var altStreamKey: String          = ""
+    // ── Automatic pairing (direct → relay-SRT → relay-RTMP ladder, chosen at start) ──
+    var autoPair: Bool                = false
+    var pairDirectURL: String         = ""   // receiver's direct SRT (srt://100.x:8890 or LAN)
+    var pairDirectKey: String         = ""
+    var pairRelaySRTURL: String       = ""   // relay SRT door
+    var pairRelaySRTKey: String       = ""
+    var pairRelayRTMPURL: String      = ""   // relay RTMP door (last resort, TCP)
+    var pairRelayRTMPKey: String      = ""
+    var pairCode: String              = ""   // link code + secret, to report the chosen transport
+    var pairSecret: String            = ""
 
     // Failsafe options
     var backupRTMPURL: String         = ""    // full backup destination (url/key); empty = none
@@ -233,6 +243,8 @@ struct StreamConfig: Identifiable, Codable {
              fpsMatchSource, resolution, inputType, filePath, videoDeviceIndex, audioDeviceIndex,
              deckLinkDeviceName, deckLinkFormat, deckLinkConnector, deckLinkTenBit, videoCodec,
              networkURL, networkPassthrough, srtLatencyMs, altRTMPURL, altStreamKey,
+             autoPair, pairDirectURL, pairDirectKey, pairRelaySRTURL, pairRelaySRTKey,
+             pairRelayRTMPURL, pairRelayRTMPKey, pairCode, pairSecret,
              backupRTMPURL, safetyRecording, fallbackEnabled,
              fallbackMediaPath, adaptiveBitrate, overlay
     }
@@ -263,6 +275,15 @@ struct StreamConfig: Identifiable, Codable {
         srtLatencyMs       = (try? c.decode(Int.self,             forKey: .srtLatencyMs)) ?? 120
         altRTMPURL         = (try? c.decode(String.self,          forKey: .altRTMPURL)) ?? ""
         altStreamKey       = (try? c.decode(String.self,          forKey: .altStreamKey)) ?? ""
+        autoPair           = (try? c.decode(Bool.self,            forKey: .autoPair)) ?? false
+        pairDirectURL      = (try? c.decode(String.self,          forKey: .pairDirectURL)) ?? ""
+        pairDirectKey      = (try? c.decode(String.self,          forKey: .pairDirectKey)) ?? ""
+        pairRelaySRTURL    = (try? c.decode(String.self,          forKey: .pairRelaySRTURL)) ?? ""
+        pairRelaySRTKey    = (try? c.decode(String.self,          forKey: .pairRelaySRTKey)) ?? ""
+        pairRelayRTMPURL   = (try? c.decode(String.self,          forKey: .pairRelayRTMPURL)) ?? ""
+        pairRelayRTMPKey   = (try? c.decode(String.self,          forKey: .pairRelayRTMPKey)) ?? ""
+        pairCode           = (try? c.decode(String.self,          forKey: .pairCode)) ?? ""
+        pairSecret         = (try? c.decode(String.self,          forKey: .pairSecret)) ?? ""
         backupRTMPURL      = (try? c.decode(String.self,          forKey: .backupRTMPURL)) ?? ""
         safetyRecording    = (try? c.decode(Bool.self,            forKey: .safetyRecording)) ?? false
         fallbackEnabled    = (try? c.decode(Bool.self,            forKey: .fallbackEnabled)) ?? false

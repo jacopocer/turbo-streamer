@@ -91,6 +91,18 @@ enum LinkClient {
         return state.receivers
     }
 
+    /// The streamer tells the rendezvous which transport it settled on, so receivers align
+    /// (publisher mode for a direct publish, pull for the relay).
+    static func reportTransport(code: String, secret: String, mode: String, detail: String) async {
+        guard let url = URL(string: "\(baseURL)/v1/session/\(code)/transport") else { return }
+        var req = URLRequest(url: url, timeoutInterval: 10)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(secret, forHTTPHeaderField: "x-secret")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["mode": mode, "detail": detail])
+        _ = try? await URLSession.shared.data(for: req)
+    }
+
     static func close(code: String, secret: String) async {
         guard let url = URL(string: "\(baseURL)/v1/session/\(code)") else { return }
         var req = URLRequest(url: url, timeoutInterval: 10)
