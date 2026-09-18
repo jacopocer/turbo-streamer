@@ -109,6 +109,27 @@ else
     echo "⚠️   No ffmpeg found — app will fall back to system ffmpeg."
 fi
 
+# ── mediamtx + NDI (embedded LAN server: publish the feed on the local network) ─
+# Reuse the artifacts the Receiver already builds.
+if [ -x receiver/vendor/mediamtx ]; then
+    cp receiver/vendor/mediamtx "$BIN_DST/mediamtx" && chmod +x "$BIN_DST/mediamtx"
+    [ -f receiver/vendor/mediamtx.LICENSE ] && cp receiver/vendor/mediamtx.LICENSE "$BUNDLE/Contents/Resources/" || true
+    echo "✅  Bundled mediamtx"
+else
+    echo "⚠️   receiver/vendor/mediamtx missing — LAN publishing unavailable (run receiver/fetch-mediamtx.sh)"
+fi
+if [ -x receiver/ndi/bin/ndi-sender ]; then
+    cp receiver/ndi/bin/ndi-sender receiver/ndi/bin/ndi-find "$BIN_DST/" 2>/dev/null || cp receiver/ndi/bin/ndi-sender "$BIN_DST/"
+    chmod +x "$BIN_DST/ndi-sender" 2>/dev/null || true
+    if [ -f /usr/local/lib/libndi.dylib ]; then
+        mkdir -p "$BIN_DST/lib"; cp /usr/local/lib/libndi.dylib "$BIN_DST/lib/libndi.dylib"
+        [ -f /usr/local/lib/libndi_licenses.txt ] && cp /usr/local/lib/libndi_licenses.txt "$BUNDLE/Contents/Resources/" || true
+        echo "✅  Bundled ndi-sender + NDI runtime"
+    else
+        echo "✅  Bundled ndi-sender (NDI runtime not found — needs NDI Tools on the target)"
+    fi
+fi
+
 # ── turbo-net (embedded Tailscale node, tsnet) ─────────────────────────────
 if [ -x net/bin/turbo-net ] || [ -x ../net/bin/turbo-net ]; then
     SRC=$([ -x net/bin/turbo-net ] && echo net/bin/turbo-net || echo ../net/bin/turbo-net)

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct SetupView: View {
     @EnvironmentObject var manager: StreamManager
@@ -8,6 +9,7 @@ struct SetupView: View {
     @State private var newProfileName  = ""
     @State private var showAlerts      = false
     @State private var showNetwork     = false
+    @State private var showLAN         = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,6 +20,8 @@ struct SetupView: View {
                     .font(.custom("SofiaPro", size: 13))
                     .foregroundStyle(Color.white.opacity(0.45))
                 Spacer()
+
+                lanButton
 
                 networkButton
 
@@ -138,6 +142,97 @@ struct SetupView: View {
     }
 
     // MARK: - Helpers
+
+    @ViewBuilder
+    private var lanButton: some View {
+        let on = manager.localPublishEnabled
+        Button { showLAN.toggle() } label: {
+            Label(on ? "On this network" : "Publish on LAN",
+                  systemImage: on ? "dot.radiowaves.left.and.right" : "wifi")
+                .font(.custom("SofiaPro", size: 12))
+                .foregroundStyle(on ? Color.accentColor : Color.white.opacity(0.7))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .help("Serve this stream on the local network — OBS, a browser, and NDI — with no server in between.")
+        .popover(isPresented: $showLAN, arrowEdge: .bottom) { lanPopover }
+    }
+
+    @ViewBuilder
+    private var lanPopover: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Publish on the local network").font(.custom("SofiaPro-SemiBold", size: 13))
+                Spacer()
+                Toggle("", isOn: Binding(get: { manager.localPublishEnabled },
+                                         set: { manager.setLocalPublish($0) }))
+                    .labelsHidden().toggleStyle(.switch)
+            }
+            Text("Turns this Mac into the receiver: your stream is served on the LAN over RTSP, HLS (browser) and SRT, and as NDI — no Turbo Receiver and no server needed. Use it when everything is on one network. While it's on, streams publish here instead of to the platform.")
+                .font(.custom("SofiaPro", size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if manager.localPublishEnabled {
+                if !manager.localServer.available {
+                    Text("mediamtx isn't bundled in this build — LAN publishing is unavailable.")
+                        .font(.custom("SofiaPro", size: 11)).foregroundStyle(.orange)
+                } else {
+                    Divider()
+                    ForEach(manager.configs) { cfg in
+                        lanFeedRow(cfg)
+                    }
+                }
+            }
+        }
+        .padding(16).frame(width: 440)
+    }
+
+    @ViewBuilder
+    private func lanFeedRow(_ cfg: StreamConfig) -> some View {
+        let path = manager.localPathName(for: cfg)
+        let live = manager.localServer.statuses[path]?.ready == true
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Circle().fill(live ? Color.green : Color.orange.opacity(0.6)).frame(width: 7, height: 7)
+                Text(cfg.name).font(.custom("SofiaPro-SemiBold", size: 12)).foregroundStyle(.white)
+                Text(live ? "LIVE" : "idle").font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(live ? .green : .secondary)
+                Spacer()
+                Button {
+                    manager.localServer.toggleNDI(path: path, name: cfg.name)
+                } label: {
+                    let ndiOn = manager.localServer.ndiEnabled.contains(path)
+                    Label("NDI", systemImage: ndiOn ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(ndiOn ? Color.accentColor : Color.secondary)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .disabled(!manager.localServer.ndiAvailable || (!live && !manager.localServer.ndiEnabled.contains(path)))
+                .help(manager.localServer.ndiAvailable ? "Publish this feed as NDI on the LAN" : "NDI unavailable")
+            }
+            lanURLRow("OBS · this LAN (RTSP)", manager.localServer.rtspURL(path))
+            lanURLRow("Browser · this LAN (HLS)", manager.localServer.hlsURL(path), openable: true)
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func lanURLRow(_ label: String, _ value: String, openable: Bool = false) -> some View {
+        HStack(spacing: 6) {
+            Text(label).font(.system(size: 10)).foregroundStyle(.secondary).frame(width: 170, alignment: .leading)
+            Text(value).font(.system(size: 10, design: .monospaced)).foregroundStyle(.white)
+                .textSelection(.enabled).lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 4)
+            if openable {
+                Button { if let u = URL(string: value) { NSWorkspace.shared.open(u) } } label: { Image(systemName: "safari") }
+                    .buttonStyle(.borderless).help("Open in the browser")
+            }
+            Button {
+                NSPasteboard.general.clearContents(); NSPasteboard.general.setString(value, forType: .string)
+            } label: { Image(systemName: "doc.on.doc") }.buttonStyle(.borderless).help("Copy")
+        }
+    }
 
     @ViewBuilder
     private var networkButton: some View {
