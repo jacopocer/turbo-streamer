@@ -25,6 +25,7 @@ if [ ! -x vendor/mediamtx ]; then
     echo "⚠️   vendor/mediamtx missing — fetching…"
     ./fetch-mediamtx.sh
 fi
+[ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$BUNDLE/Contents/Resources/AppIcon.icns" && echo "Bundled app icon" || true
 cp vendor/mediamtx "$BUNDLE/Contents/Resources/bin/mediamtx"
 chmod +x "$BUNDLE/Contents/Resources/bin/mediamtx"
 [ -f vendor/mediamtx.LICENSE ] && cp vendor/mediamtx.LICENSE "$BUNDLE/Contents/Resources/" || true
@@ -94,6 +95,7 @@ cat > "$BUNDLE/Contents/Info.plist" <<PLIST
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>__SHORT__</string>
     <key>CFBundleVersion</key><string>__BUILD__</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSAppTransportSecurity</key>

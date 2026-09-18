@@ -40,9 +40,7 @@ struct ContentView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Circle()
-                .fill(server.isRunning ? Color.green : Color.white.opacity(0.25))
-                .frame(width: 9, height: 9)
+            WobblingIcon(isActive: server.isReceiving, isTroubled: server.isTroubled)
             Text("Turbo Receiver")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.white)
@@ -385,5 +383,46 @@ struct ContentView: View {
     private func addKey() {
         server.addKey(named: newKeyName.trimmingCharacters(in: .whitespaces))
         newKeyName = ""
+    }
+}
+
+
+// MARK: - Wobbling app icon (rocks while receiving, frantic when a feed drops)
+
+struct WobblingIcon: View {
+    let isActive: Bool
+    let isTroubled: Bool
+
+    var body: some View {
+        if isActive {
+            TimelineView(.animation) { context in
+                rocked(at: context.date.timeIntervalSinceReferenceDate)
+            }
+        } else {
+            baseIcon
+        }
+    }
+
+    private var baseIcon: some View {
+        Image(nsImage: NSApplication.shared.applicationIconImage)
+            .resizable()
+            .interpolation(.high)
+            .frame(width: 30, height: 30)
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+
+    @ViewBuilder
+    private func rocked(at t: TimeInterval) -> some View {
+        // Receiving: a calm ~1 Hz side-to-side rock.
+        // A dropped feed: faster (~3.6 Hz), wider, with jitter and positional shake.
+        let freq: Double = isTroubled ? 3.6 : 1.0
+        let amp:  Double = isTroubled ? 15  : 11
+        let tilt = sin(t * 2 * .pi * freq) * amp
+                 + (isTroubled ? sin(t * 41) * 4 : 0)
+        let shakeX = isTroubled ? sin(t * 47) * 1.6 + sin(t * 89) * 0.9 : 0
+        let shakeY = isTroubled ? sin(t * 53) * 1.2 : 0
+        baseIcon
+            .rotationEffect(.degrees(tilt), anchor: .bottom)
+            .offset(x: shakeX, y: shakeY)
     }
 }

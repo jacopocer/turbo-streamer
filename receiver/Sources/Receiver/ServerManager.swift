@@ -15,6 +15,10 @@ final class ServerManager: ObservableObject {
     @Published var keys: [IngestKey] = [] { didSet { saveKeys() } }
     @Published private(set) var isRunning = false
     @Published private(set) var statuses: [String: PathStatus] = [:]
+    @Published private(set) var isReceiving = false   // a feed is flowing right now
+    @Published private(set) var isTroubled  = false   // a feed that was live has dropped
+    private var everReady: Set<String> = []           // feeds that have been live this run
+    private var dropped:   Set<String> = []           // live-then-lost feeds (drives the frantic icon)
     @Published private(set) var logLines: [String] = []
     @Published private(set) var ndiEnabled: Set<String> = []      // keys currently emitting NDI
 
@@ -245,6 +249,8 @@ final class ServerManager: ObservableObject {
         process = nil
         isRunning = false
         statuses = [:]
+        everReady = []; dropped = []
+        isReceiving = false; isTroubled = false
     }
 
     /// SIGKILL on quit so the server never orphans and keeps the ports bound.
@@ -346,6 +352,19 @@ final class ServerManager: ObservableObject {
             fresh[item.name] = s
         }
         statuses = fresh
+
+        // Health for the animated icon: rock while receiving, go frantic when a feed
+        // that was live drops out.
+        var receiving = false
+        for (name, st) in fresh {
+            if st.ready { receiving = true; everReady.insert(name); dropped.remove(name) }
+            else if everReady.contains(name) { dropped.insert(name) }
+        }
+        let present = Set(fresh.keys)
+        everReady.formIntersection(present)
+        dropped.formIntersection(present)
+        isReceiving = receiving
+        isTroubled  = isRunning && !dropped.isEmpty
     }
 
     @discardableResult
