@@ -42,7 +42,7 @@ struct ContentView: View {
         HStack(spacing: 12) {
             WobblingIcon(isActive: server.isReceiving, isTroubled: server.isTroubled)
             Text("Turbo Receiver")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.custom("Bello-Pro", size: 28))
                 .foregroundStyle(.white)
             Text(server.isRunning ? "running" : "stopped")
                 .font(.system(size: 11))
@@ -407,8 +407,8 @@ struct WobblingIcon: View {
         Image(nsImage: NSApplication.shared.applicationIconImage)
             .resizable()
             .interpolation(.high)
-            .frame(width: 30, height: 30)
-            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .frame(width: 54, height: 54)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     @ViewBuilder

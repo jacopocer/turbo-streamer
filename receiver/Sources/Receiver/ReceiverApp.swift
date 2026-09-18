@@ -4,6 +4,8 @@ import SwiftUI
 struct ReceiverApp: App {
     @StateObject private var server = ServerManager()
 
+    init() { FontLoader.loadBundledFonts() }
+
     var body: some Scene {
         WindowGroup("Turbo Receiver") {
             RootView()
