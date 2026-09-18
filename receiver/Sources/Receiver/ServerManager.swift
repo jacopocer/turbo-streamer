@@ -40,6 +40,7 @@ final class ServerManager: ObservableObject {
     private var pollTask: Task<Void, Never>?
     private var lastBytes: [String: (bytes: Int, at: Date)] = [:]
     private var relayFallbackTasks: [String: Task<Void, Never>] = [:]
+    private var transportFollowTasks: [String: Task<Void, Never>] = [:]
     /// Per feed, which relay transport is live: "srt" (best), "rtmp" (fallback), "connecting", "failed".
     @Published private(set) var relayTransport: [String: String] = [:]
     private static let keysKey = "TurboReceiver.keys.v1"
@@ -105,10 +106,53 @@ final class ServerManager: ObservableObject {
     }
 
     /// Remembers the relay read URL that turbolink handed back for this feed.
-    func setRelaySource(_ k: IngestKey, _ source: String, rtmp: String = "") {
+    func setRelaySource(_ k: IngestKey, _ source: String, rtmp: String = "", code: String = "") {
         guard let i = keys.firstIndex(where: { $0.id == k.id }) else { return }
         keys[i].relaySource = source
         keys[i].relaySourceRTMP = rtmp
+        if !code.isEmpty { keys[i].linkCode = code.uppercased() }
+        keys[i].pullFromRelay = true   // auto-follow decides the source; default to relay-capable
+        if isRunning { startTransportFollow(keys[i]) }
+    }
+
+    /// Auto-follow the streamer's chosen transport: poll the rendezvous and set this feed's
+    /// source to match — publisher mode for a direct publish, relay pull (SRT or RTMP as the
+    /// streamer reported) otherwise. This is what makes direct→relay fully automatic.
+    func startTransportFollow(_ k: IngestKey) {
+        let key = k.key, code = k.linkCode, name = k.name
+        guard !code.isEmpty else { return }
+        transportFollowTasks[key]?.cancel()
+        transportFollowTasks[key] = Task { [weak self] in
+            var last = ""
+            while !Task.isCancelled {
+                if let t = await LinkClient.transport(code: code), let mode = t.mode, mode != last {
+                    last = mode
+                    guard let self else { return }
+                    await self.applyTransport(key: key, name: name, mode: mode)
+                }
+                try? await Task.sleep(for: .seconds(3))
+            }
+        }
+    }
+
+    private func applyTransport(key: String, name: String, mode: String) async {
+        guard let i = keys.firstIndex(where: { $0.key == key }) else { return }
+        switch mode {
+        case "direct":
+            appendLog("↧ \(name): streamer is publishing directly — waiting for it here (best quality).")
+            relayTransport[key] = "direct"
+            await applySource(key, "publisher")
+        case "relay-srt":
+            appendLog("↧ \(name): streamer is on the relay over SRT — pulling.")
+            relayTransport[key] = "srt"
+            if !keys[i].relaySource.isEmpty { await applySource(key, keys[i].relaySource) }
+        case "relay-rtmp":
+            appendLog("⚠️ \(name): streamer fell back to RTMP relay (UDP blocked) — pulling over TCP.")
+            relayTransport[key] = "rtmp"
+            let src = keys[i].relaySourceRTMP.isEmpty ? keys[i].relaySource : keys[i].relaySourceRTMP
+            if !src.isEmpty { await applySource(key, src) }
+        default: break
+        }
     }
 
     /// Direct (a publisher sends to this app) or Relay (MediaMTX pulls the feed from the
@@ -255,8 +299,10 @@ final class ServerManager: ObservableObject {
             isRunning = true
             appendLog("▶ Server started — RTMP :\(Ports.rtmp) · RTSP :\(Ports.rtsp) · HLS :\(Ports.hls)")
             startPolling()
-            // Relay feeds: pick a transport (SRT first, RTMP fallback) now that the API is up.
-            for k in keys where k.pullFromRelay && !k.relaySource.isEmpty { startRelayPull(k) }
+            // Auto-follow the streamer's transport for paired feeds; fall back to the local
+            // SRT-first ladder for older feeds that have a relay source but no code.
+            for k in keys where !k.linkCode.isEmpty { startTransportFollow(k) }
+            for k in keys where k.linkCode.isEmpty && k.pullFromRelay && !k.relaySource.isEmpty { startRelayPull(k) }
             // Expose the SRT door on the Turbo network too.
             Task { [weak self] in
                 guard let self else { return }
@@ -271,6 +317,8 @@ final class ServerManager: ObservableObject {
 
     func stop() {
         stopAllNDI()
+        for t in transportFollowTasks.values { t.cancel() }; transportFollowTasks.removeAll()
+        for t in relayFallbackTasks.values { t.cancel() }; relayFallbackTasks.removeAll()
         turboNet.close(id: "srt")
         pollTask?.cancel(); pollTask = nil
         process?.terminate()

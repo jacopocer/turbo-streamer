@@ -602,7 +602,13 @@ final class StreamManager: ObservableObject {
                 appendLog(line + ".", to: id)
             }
 
-            // ── Pre-flight: is the destination reachable? ──
+            // ── Pre-flight: pick the transport. ──
+            // Automatic pairing runs the full ladder (direct → relay-SRT → relay-RTMP) and
+            // reports its choice so the receiver aligns. Otherwise the single configured
+            // destination is probed, with the relay's RTMP door as a fallback.
+            if record.config.autoPair {
+                await resolveAutoTransport(record)
+            } else {
             // SRT is UDP, which venue and hotel networks block more often than TCP. If the
             // relay was chosen it also has an RTMP door, so the stream moves there by itself.
             let destURL = record.config.rtmpURL
@@ -640,6 +646,7 @@ final class StreamManager: ObservableObject {
                     ? "✓ Destination reachable."
                     : "⚠ Destination not reachable yet — will keep retrying once started.", to: id)
             }
+            }  // end manual (non-autoPair) pre-flight
 
             var attempt = 0
             var consecutiveFailures = 0
@@ -1417,6 +1424,62 @@ final class StreamManager: ObservableObject {
     /// The numeric framerate to encode at. With "Match source", this is the source's
     /// native rate, pre-resolved into `captureFPS` during pre-flight (capture: probed
     /// device rate; file: parsed from the media). Falls back to the user's `fps` value.
+    /// Automatic pairing: run the transport ladder best-first (direct SRT → relay SRT →
+    /// relay RTMP), pick the first that works, set the destination, and report the choice to
+    /// the rendezvous so the receiver aligns. Every fallback is announced and badged.
+    private func resolveAutoTransport(_ record: RunningStreamRecord) async {
+        let id = record.id, c = record.config
+        destinationOverride[id] = nil
+        tailnetRuns.remove(id)
+        turboNet.close(id: id.uuidString)
+
+        func report(_ mode: String, _ detail: String) async {
+            guard !c.pairCode.isEmpty, !c.pairSecret.isEmpty else { return }
+            await LinkClient.reportTransport(code: c.pairCode, secret: c.pairSecret, mode: mode, detail: detail)
+        }
+
+        // 1. Direct to the receiver (best: low latency, HEVC). Tunnel a 100.x through the
+        //    Turbo network; probe reachability before committing.
+        if !c.pairDirectURL.isEmpty, let (host, port) = Self.srtHostPort(c.pairDirectURL) {
+            var probeURL = c.pairDirectURL
+            var tunnelLocal: String? = nil
+            if TurboNet.isTailnetAddress(host) {
+                if let local = await turboNet.dial(id: id.uuidString, to: "\(host):\(port)") {
+                    tunnelLocal = local; probeURL = "srt://\(local)"
+                }
+            }
+            if await probeSRT(probeURL) {
+                destinationOverride[id] = (tunnelLocal.map { "srt://\($0)" } ?? c.pairDirectURL, c.pairDirectKey)
+                if tunnelLocal != nil { tailnetRuns.insert(id) }
+                statuses[id]?.transportWarning = nil
+                appendLog("✓ Direct path to the receiver is open — best quality (SRT\(tunnelLocal != nil ? " over the Turbo network" : "")).", to: id)
+                await report("direct", tunnelLocal != nil ? "direct (Turbo network)" : "direct")
+                return
+            }
+            if tunnelLocal != nil { turboNet.close(id: id.uuidString); tailnetRuns.remove(id) }
+            appendLog("• Direct path not reachable — trying the relay.", to: id)
+        }
+
+        // 2. Relay over SRT (still low latency, HEVC).
+        if !c.pairRelaySRTURL.isEmpty, await probeSRT(c.pairRelaySRTURL) {
+            destinationOverride[id] = (c.pairRelaySRTURL, c.pairRelaySRTKey)
+            statuses[id]?.transportWarning = nil
+            appendLog("✓ Relay over SRT (low latency).", to: id)
+            await report("relay-srt", "relay SRT")
+            return
+        }
+
+        // 3. Relay over RTMP (last resort: TCP, gets through firewalls; higher latency, H.264 only).
+        if !c.pairRelayRTMPURL.isEmpty {
+            destinationOverride[id] = (c.pairRelayRTMPURL, c.pairRelayRTMPKey)
+            statuses[id]?.transportWarning = "On RTMP relay fallback — higher latency, H.264 only"
+            appendLog("⚠️ Direct and relay-SRT are unreachable (UDP blocked). Falling back to RTMP over TCP through the relay.", to: id)
+            await report("relay-rtmp", "relay RTMP (UDP blocked)")
+            return
+        }
+        appendLog("✗ Auto-pairing has no usable transport configured — re-link the receiver.", to: id)
+    }
+
     /// SRT reachability. Connects with a deliberately wrong streamid: a rejection means the
     /// server answered (the UDP path is open); the 3 s timeout means blocked or closed.
     /// Nothing is published either way.

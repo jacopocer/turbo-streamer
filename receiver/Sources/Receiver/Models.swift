@@ -12,6 +12,7 @@ struct IngestKey: Identifiable, Codable, Equatable {
     var relaySource: String = ""      // relay read URL from the last Link (srt://…?streamid=read:…)
     var relaySourceRTMP: String = ""  // RTMP fallback read URL (TCP, for networks that block UDP)
     var pullFromRelay: Bool = false   // Relay mode: MediaMTX pulls this feed from the relay
+    var linkCode: String = ""         // pairing code, so the feed can auto-follow the streamer's transport
 
     init(name: String, key: String = IngestKey.randomKey()) {
         self.name = name
