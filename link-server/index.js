@@ -73,8 +73,10 @@ function relayForStreamer(s) {
 }
 function relayForReceiver(s) {
   return {
-    host: RELAY.host, srtPort: RELAY.srtPort, path: s.code, latencyMs: RELAY.latencyMs,
+    host: RELAY.host, srtPort: RELAY.srtPort, rtmpPort: RELAY.rtmpPort, path: s.code, latencyMs: RELAY.latencyMs,
+    // SRT (UDP) first for latency; RTMP (TCP) is the fallback for networks that block UDP.
     source: `srt://${RELAY.host}:${RELAY.srtPort}?streamid=read:${s.code}:receiver:${s.relay.readPass}`,
+    sourceRTMP: `rtmp://${RELAY.host}:${RELAY.rtmpPort}/${s.code}?user=receiver&pass=${s.relay.readPass}`,
   };
 }
 

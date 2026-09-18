@@ -35,6 +35,7 @@ final class ServerManager: ObservableObject {
     private var pipe: Pipe?
     private var pollTask: Task<Void, Never>?
     private var lastBytes: [String: (bytes: Int, at: Date)] = [:]
+    private var relayFallbackTasks: [String: Task<Void, Never>] = [:]
     private static let keysKey = "TurboReceiver.keys.v1"
 
     let mediamtxPath: String
@@ -98,9 +99,10 @@ final class ServerManager: ObservableObject {
     }
 
     /// Remembers the relay read URL that turbolink handed back for this feed.
-    func setRelaySource(_ k: IngestKey, _ source: String) {
+    func setRelaySource(_ k: IngestKey, _ source: String, rtmp: String = "") {
         guard let i = keys.firstIndex(where: { $0.id == k.id }) else { return }
         keys[i].relaySource = source
+        keys[i].relaySourceRTMP = rtmp
     }
 
     /// Direct (a publisher sends to this app) or Relay (MediaMTX pulls the feed from the
@@ -109,12 +111,38 @@ final class ServerManager: ObservableObject {
     func setPullFromRelay(_ k: IngestKey, _ on: Bool) {
         guard let i = keys.firstIndex(where: { $0.id == k.id }) else { return }
         keys[i].pullFromRelay = on
-        let src = (on && !keys[i].relaySource.isEmpty) ? keys[i].relaySource : "publisher"
-        appendLog(on ? "↓ \(k.name): pulling from the relay." : "↓ \(k.name): direct — waiting for a publisher.")
-        if isRunning {
-            let body = "{\"source\":\"\(src)\"}"
-            Task { await apiCall(method: "PATCH", path: "/v3/config/paths/patch/\(k.key)", body: body) }
+        relayFallbackTasks[k.key]?.cancel(); relayFallbackTasks[k.key] = nil
+        if !on {
+            appendLog("↓ \(k.name): direct — waiting for a publisher.")
+            if isRunning { Task { await self.applySource(k.key, "publisher") } }
+            return
         }
+        guard !keys[i].relaySource.isEmpty else { return }
+        appendLog("↓ \(k.name): pulling from the relay over SRT.")
+        let key = k.key, name = k.name
+        let srt = keys[i].relaySource, rtmp = keys[i].relaySourceRTMP
+        if isRunning {
+            relayFallbackTasks[key] = Task { [weak self] in
+                guard let self else { return }
+                await self.applySource(key, srt)
+                // SRT is UDP: venue and office networks block it more often than TCP.
+                // If the path isn't pulling within ~8 s and we have an RTMP URL, switch to
+                // it — same stream, over TCP 1935, which gets through almost anywhere.
+                guard !rtmp.isEmpty else { return }
+                for _ in 0..<8 {
+                    try? await Task.sleep(for: .seconds(1))
+                    if Task.isCancelled { return }
+                    if self.statuses[key]?.ready == true { return }   // SRT is working, leave it
+                }
+                if Task.isCancelled { return }
+                self.appendLog("↓ \(name): SRT didn't come up (UDP likely blocked) — switching to RTMP over TCP.")
+                await self.applySource(key, rtmp)
+            }
+        }
+    }
+
+    private func applySource(_ key: String, _ source: String) async {
+        await apiCall(method: "PATCH", path: "/v3/config/paths/patch/\(key)", body: "{\"source\":\"\(source)\"}")
     }
 
     func regenerateKey(_ k: IngestKey) {
