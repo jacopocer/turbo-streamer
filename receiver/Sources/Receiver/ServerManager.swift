@@ -168,8 +168,19 @@ final class ServerManager: ObservableObject {
     // MARK: - URLs shown to the user
 
     func ingestURL(_ k: IngestKey) -> String { "rtmp://\(selectedAddress):\(Ports.rtmp)/\(k.key)" }
-    func rtspURL(_ k: IngestKey)   -> String { "rtsp://\(selectedAddress):\(Ports.rtsp)/\(k.key)" }
-    func hlsURL(_ k: IngestKey)    -> String { "http://\(selectedAddress):\(Ports.hls)/\(k.key)" }
+    func rtspURL(_ k: IngestKey)   -> String { "rtsp://\(lanAddress):\(Ports.rtsp)/\(k.key)" }
+    func hlsURL(_ k: IngestKey)    -> String { "http://\(lanAddress):\(Ports.hls)/\(k.key)" }
+
+    /// The address for viewers on the receiver's own network (OBS, a browser): a private
+    /// LAN IP, never the Tailscale 100.x one, which a LAN device without Tailscale can't
+    /// reach. Falls back to the selected address when there's no private IP.
+    var lanAddress: String {
+        addresses.first(where: { ip in
+            let p = ip.split(separator: ".").compactMap { Int($0) }
+            guard p.count == 4 else { return false }
+            return p[0] == 192 && p[1] == 168 || p[0] == 10 || (p[0] == 172 && (16...31).contains(p[1]))
+        }) ?? selectedAddress
+    }
     /// Low-latency publish endpoint. The path travels in the SRT streamid.
     func srtURL(_ k: IngestKey)    -> String { "srt://\(selectedAddress):\(Ports.srt)  (streamid: publish:\(k.key))" }
 
