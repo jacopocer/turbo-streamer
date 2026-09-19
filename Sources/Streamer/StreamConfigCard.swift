@@ -43,7 +43,24 @@ struct StreamConfigCard: View {
                 }
                 .pickerStyle(.segmented)
                 .onChange(of: config.rtmpPreset) { preset in
-                    if preset != .custom { config.rtmpURL = preset.defaultURL }
+                    if preset != .custom { config.rtmpURL = preset.defaultURL; config.autoPair = false }
+                }
+
+                if config.autoPair {
+                    HStack(spacing: 8) {
+                        Label("Auto-pairing on — direct → relay-SRT → relay-RTMP, chosen at start",
+                              systemImage: "wand.and.stars")
+                            .font(.custom("SofiaPro", size: 11))
+                            .foregroundStyle(Color.accentColor)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        Button("Off") { config.autoPair = false }
+                            .buttonStyle(.bordered).controlSize(.small)
+                            .help("Stop auto-pairing and send to the URL and key below as typed.")
+                    }
+                    .padding(8)
+                    .background(Color.accentColor.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
 
                 labeled("RTMP URL") {
@@ -51,6 +68,9 @@ struct StreamConfigCard: View {
                         .textFieldStyle(.roundedBorder)
                         .disabled(config.rtmpPreset != .custom)
                         .foregroundStyle(config.rtmpPreset == .custom ? .white : Color.white.opacity(0.4))
+                        .onChange(of: config.rtmpURL) { v in
+                            if config.autoPair, v != config.pairDirectURL { config.autoPair = false }
+                        }
                 }
 
                 if config.rtmpURL.lowercased().hasPrefix("srt://") {
@@ -67,6 +87,9 @@ struct StreamConfigCard: View {
                 labeled("Stream Key") {
                     TextField("Your stream key", text: $config.streamKey)
                         .textFieldStyle(.roundedBorder)
+                        .onChange(of: config.streamKey) { v in
+                            if config.autoPair, v != config.pairDirectKey { config.autoPair = false }
+                        }
                 }
 
                 HStack(spacing: 8) {
@@ -74,6 +97,7 @@ struct StreamConfigCard: View {
                         if let s = NSPasteboard.general.string(forType: .string),
                            let parts = StreamConfig.splitRTMPURL(s) {
                             config.rtmpPreset = .custom
+                            config.autoPair   = false
                             config.rtmpURL    = parts.base
                             config.streamKey  = parts.key
                             pasteHint = nil
