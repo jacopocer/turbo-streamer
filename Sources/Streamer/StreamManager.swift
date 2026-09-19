@@ -606,7 +606,16 @@ final class StreamManager: ObservableObject {
             // Automatic pairing runs the full ladder (direct → relay-SRT → relay-RTMP) and
             // reports its choice so the receiver aligns. Otherwise the single configured
             // destination is probed, with the relay's RTMP door as a fallback.
-            if record.config.autoPair {
+            // Auto-pairing applies only while the destination is still the paired one. If the
+            // operator typed another URL or key by hand (e.g. a platform), that wins — the
+            // ladder must never silently override a manual destination.
+            let pairedStillActive = record.config.autoPair
+                && record.config.rtmpURL == record.config.pairDirectURL
+                && record.config.streamKey == record.config.pairDirectKey
+            if record.config.autoPair && !pairedStillActive {
+                appendLog("ℹ️ Destination was changed by hand — auto-pairing is off for this stream; sending to \(record.config.rtmpURL).", to: id)
+            }
+            if pairedStillActive {
                 await resolveAutoTransport(record)
             } else {
             // SRT is UDP, which venue and hotel networks block more often than TCP. If the
