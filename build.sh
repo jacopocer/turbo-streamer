@@ -45,6 +45,7 @@ ffmpeg_is_fit() {
     local cfg
     cfg=$(DYLD_LIBRARY_PATH="$c/lib" "$c/ffmpeg" -hide_banner -version 2>/dev/null)
     echo "$cfg" | grep -q -- '--enable-libsrt' || return 1
+    echo "$cfg" | grep -q -- '--enable-libx264' || return 1
     echo "$cfg" | grep -q -- '--enable-decklink' || return 1
     return 0
 }
@@ -52,7 +53,7 @@ for c in "vendor/bin" "/opt/homebrew/bin"; do
     if ffmpeg_is_fit "$c"; then FFMPEG_SRC="$c"; break; fi
 done
 if [ -z "$FFMPEG_SRC" ]; then
-    echo "‼️   No suitable ffmpeg found (need arm64 with --enable-libsrt and --enable-decklink)."
+    echo "‼️   No suitable ffmpeg found (need arm64 with --enable-libsrt, --enable-libx264 and --enable-decklink)."
     echo "    Checked: vendor/bin, /opt/homebrew/bin."
     echo "    Refusing to bundle an unfit binary — SRT output and DeckLink would break at runtime."
     echo "    Fix Homebrew's ffmpeg, or place a good one in vendor/bin/, then re-run."
@@ -61,53 +62,15 @@ fi
 HOMEBREW_FFMPEG="$FFMPEG_SRC/ffmpeg"
 HOMEBREW_FFPROBE="$FFMPEG_SRC/ffprobe"
 
-if [ -d "$FFMPEG_SRC/lib" ]; then
-    echo "✅  Reusing bundled ffmpeg set from $FFMPEG_SRC"
-    mkdir -p "$LIB_DST"
-    cp "$HOMEBREW_FFMPEG" "$BIN_DST/ffmpeg"
-    [ -f "$HOMEBREW_FFPROBE" ] && cp "$HOMEBREW_FFPROBE" "$BIN_DST/ffprobe" || true
-    chmod +x "$BIN_DST/ffmpeg" "$BIN_DST/ffprobe" 2>/dev/null || true
-    cp -R "$FFMPEG_SRC/lib/." "$LIB_DST/"
-    echo "✅  Bundled $(ls "$LIB_DST" | wc -l | tr -d ' ') dylibs"
-
-elif [ -n "$FFMPEG_SRC" ]; then
-    echo "✅  Found native ffmpeg at $FFMPEG_SRC — bundling with dylibs…"
-    mkdir -p "$LIB_DST"
-
-    cp "$HOMEBREW_FFMPEG" "$BIN_DST/ffmpeg"
-    [ -f "$HOMEBREW_FFPROBE" ] && cp "$HOMEBREW_FFPROBE" "$BIN_DST/ffprobe" || true
-    chmod +x "$BIN_DST/ffmpeg" "$BIN_DST/ffprobe" 2>/dev/null || true
-
-    # Collect and copy all non-system Homebrew dylibs (ffmpeg + its transitive deps)
-    COPIED=""
-    copy_deps() {
-        local BIN="$1"
-        [ -f "$BIN" ] || return
-        while IFS= read -r LIB; do
-            [ -z "$LIB" ] && continue
-            LIB_NAME=$(basename "$LIB")
-            # Skip if already copied to avoid infinite loops
-            echo "$COPIED" | grep -qF "$LIB_NAME" && continue
-            COPIED="$COPIED $LIB_NAME"
-            cp "$LIB" "$LIB_DST/$LIB_NAME"
-            chmod 755 "$LIB_DST/$LIB_NAME"
-            # Recurse into this dylib's own deps
-            copy_deps "$LIB_DST/$LIB_NAME"
-        done < <(otool -L "$BIN" | awk '{print $1}' | grep -E "^/opt/homebrew" || true)
-    }
-    copy_deps "$BIN_DST/ffmpeg"
-    [ -f "$BIN_DST/ffprobe" ] && copy_deps "$BIN_DST/ffprobe" || true
-
-    echo "✅  Bundled $(ls "$LIB_DST" | wc -l | tr -d ' ') dylibs"
-
-elif [ -f "bin/ffmpeg" ]; then
-    ARCH=$(file bin/ffmpeg | grep -o 'arm64\|x86_64' || echo 'unknown')
-    echo "⚠️   Using ./bin/ffmpeg ($ARCH)"
-    cp bin/ffmpeg "$BIN_DST/ffmpeg" && chmod +x "$BIN_DST/ffmpeg"
-    [ -f "bin/ffprobe" ] && cp bin/ffprobe "$BIN_DST/ffprobe" && chmod +x "$BIN_DST/ffprobe" || true
-else
-    echo "⚠️   No ffmpeg found — app will fall back to system ffmpeg."
-fi
+echo "✅  ffmpeg from $FFMPEG_SRC — bundling with its dylibs…"
+mkdir -p "$LIB_DST"
+cp "$HOMEBREW_FFMPEG" "$BIN_DST/ffmpeg"
+[ -f "$HOMEBREW_FFPROBE" ] && cp "$HOMEBREW_FFPROBE" "$BIN_DST/ffprobe" || true
+chmod +x "$BIN_DST/ffmpeg" "$BIN_DST/ffprobe" 2>/dev/null || true
+# A pre-assembled set (vendor/bin/lib) goes in as-is; either way the shared helper
+# then pulls in every transitive non-system dylib (verified before signing, below).
+[ -d "$FFMPEG_SRC/lib" ] && cp -R "$FFMPEG_SRC/lib/." "$LIB_DST/" || true
+./vendor/copy-dylibs.sh collect "$LIB_DST" "$BIN_DST/ffmpeg" "$BIN_DST/ffprobe"
 
 # ── mediamtx + NDI (embedded LAN server: publish the feed on the local network) ─
 # Reuse the artifacts the Receiver already builds.
@@ -121,13 +84,17 @@ fi
 if [ -x receiver/ndi/bin/ndi-sender ]; then
     cp receiver/ndi/bin/ndi-sender receiver/ndi/bin/ndi-find "$BIN_DST/" 2>/dev/null || cp receiver/ndi/bin/ndi-sender "$BIN_DST/"
     chmod +x "$BIN_DST/ndi-sender" 2>/dev/null || true
-    if [ -f /usr/local/lib/libndi.dylib ]; then
-        mkdir -p "$BIN_DST/lib"; cp /usr/local/lib/libndi.dylib "$BIN_DST/lib/libndi.dylib"
-        [ -f /usr/local/lib/libndi_licenses.txt ] && cp /usr/local/lib/libndi_licenses.txt "$BUNDLE/Contents/Resources/" || true
-        echo "✅  Bundled ndi-sender + NDI runtime"
+    # The newest libndi on this Mac: the SDK's, once receiver/ndi/ndi-sdk.sh installed it.
+    if NDI_LIB="$(receiver/ndi/ndi-sdk.sh lib)"; then
+        mkdir -p "$BIN_DST/lib"; cp "$NDI_LIB" "$BIN_DST/lib/libndi.dylib"
+        for l in "$(dirname "$NDI_LIB")/libndi_licenses.txt" /usr/local/lib/libndi_licenses.txt; do
+            if [ -f "$l" ]; then cp "$l" "$BUNDLE/Contents/Resources/"; break; fi
+        done
+        echo "✅  Bundled ndi-sender + NDI runtime ($NDI_LIB)"
     else
         echo "✅  Bundled ndi-sender (NDI runtime not found — needs NDI Tools on the target)"
     fi
+    receiver/ndi/ndi-sdk.sh check || true   # speaks up when NDI has published a newer SDK
 fi
 
 # ── turbo-net (embedded Tailscale node, tsnet) ─────────────────────────────
@@ -183,6 +150,9 @@ SHORT_VERSION="$(cat ./VERSION 2>/dev/null || echo 3.0)"
 BUILD_NUMBER="$(git -C . rev-list --count HEAD 2>/dev/null || echo 0)"
 /usr/bin/sed -i '' "s/__SHORT__/$SHORT_VERSION/; s/__BUILD__/$BUILD_NUMBER/" "$BUNDLE/Contents/Info.plist"
 echo "🏷  Version $SHORT_VERSION (build $BUILD_NUMBER)"
+
+# Every helper must find its libraries inside the bundle, not in Homebrew.
+./vendor/copy-dylibs.sh verify "$LIB_DST" "$BIN_DST"
 
 echo "✍️   Code-signing (ad-hoc)…"
 chmod -R u+rw "$BUNDLE"
