@@ -82,16 +82,30 @@ function relayForReceiver(s) {
 }
 
 function load() {
+  let text;
+  try { text = fs.readFileSync(STORE, 'utf8'); }
+  catch { sessions = new Map(); sweep(); return; }          // no store yet
   try {
-    const raw = JSON.parse(fs.readFileSync(STORE, 'utf8'));
-    sessions = new Map(raw.map(s => [s.code, s]));
-  } catch { sessions = new Map(); }
+    sessions = new Map(JSON.parse(text).map(s => [s.code, s]));
+  } catch (e) {
+    // Keep the evidence instead of overwriting it on the next save.
+    const aside = `${STORE}.corrupt-${Date.now()}`;
+    try { fs.renameSync(STORE, aside); } catch {}
+    console.error(`sessions store unreadable (${e.message}); moved to ${aside}, starting empty`);
+    sessions = new Map();
+  }
   sweep();
 }
+// Only lastActive changes are deferred (flushed below); anything that creates or
+// deletes a session saves at once.
+let dirty = false;
 function save() {
   try {
     fs.mkdirSync(DATA, { recursive: true });
-    fs.writeFileSync(STORE, JSON.stringify([...sessions.values()]), { mode: 0o600 });
+    const tmp = `${STORE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify([...sessions.values()]), { mode: 0o600 });
+    fs.renameSync(tmp, STORE);                              // atomic on the same volume
+    dirty = false;
   } catch (e) { console.error('save failed:', e.message); }
 }
 // A session lives TTL past its last use (poll, join, relay auth), not past its
@@ -104,7 +118,7 @@ function sweep() {
   }
   if (dropped) save();
 }
-function touch(s) { s.lastActive = Date.now(); }
+function touch(s) { s.lastActive = Date.now(); dirty = true; }
 
 const json = (res, status, body) => {
   const b = Buffer.from(JSON.stringify(body));
@@ -140,10 +154,13 @@ function secretOk(session, given) { return sameSecret(session.secret, given); }
 const str = (v, max = 200) => (typeof v === 'string' ? v.slice(0, max) : '');
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://localhost');
-  const parts = url.pathname.split('/').filter(Boolean);
-
   try {
+    // Inside the try: a path the URL parser rejects (`//`, `//:`) used to throw
+    // out of this async handler and crash the process — one request per restart
+    // interval kept turbolink, and with it relay auth, down.
+    const url = new URL(req.url, 'http://localhost');
+    const parts = url.pathname.split('/').filter(Boolean);
+
     if (req.method === 'GET' && url.pathname === '/health') {
       return json(res, 200, { ok: true, sessions: sessions.size });
     }
@@ -158,15 +175,22 @@ const server = http.createServer(async (req, res) => {
       } catch { return json(res, 404, { error: 'no appcast published' }); }
     }
 
-    // GET /downloads/<file> — the app zips. Sanitised: one path segment, .zip only.
+    // GET /downloads/<file> — the app zips, plus the ffmpeg source tarball the GPL
+    // written offer inside the bundles points at. Sanitised: one path segment,
+    // .zip or .tar.xz only.
     if (req.method === 'GET' && parts[0] === 'downloads' && parts.length === 2) {
       const name = parts[1];
-      if (!/^[A-Za-z0-9._-]+\.zip$/.test(name)) return json(res, 400, { error: 'bad name' });
+      const kind = /^[A-Za-z0-9._-]+\.zip$/.test(name) ? 'application/zip'
+                 : /^[A-Za-z0-9._-]+\.tar\.xz$/.test(name) ? 'application/x-xz' : null;
+      if (!kind) return json(res, 400, { error: 'bad name' });
       const file = path.join(DOWNLOADS, name);
       if (!file.startsWith(path.resolve(DOWNLOADS) + path.sep)) return json(res, 400, { error: 'bad path' });
       let st; try { st = fs.statSync(file); } catch { return json(res, 404, { error: 'not found' }); }
-      res.writeHead(200, { 'content-type': 'application/zip', 'content-length': st.size });
-      return fs.createReadStream(file).pipe(res);
+      res.writeHead(200, { 'content-type': kind, 'content-length': st.size });
+      const stream = fs.createReadStream(file);
+      stream.on('error', () => res.destroy());
+      res.on('close', () => stream.destroy());
+      return stream.pipe(res);
     }
 
     // POST /v1/session — streamer opens a session
@@ -244,7 +268,10 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const action = str(body.action, 20);
       if (['api', 'metrics', 'pprof'].includes(action)) {
-        return json(res, /^(127\.|::1)/.test(str(body.ip, 64)) ? 200 : 401, {});
+        // Off in turborelay.yml, and refused here too. Approving any loopback caller
+        // meant every process on this shared box could list live codes or switch the
+        // relay's auth off; nothing of ours uses these.
+        return json(res, 401, {});
       }
       const s = sessions.get(str(body.path, 20).toUpperCase());
       if (!s || !s.relay) return json(res, 401, {});
@@ -309,10 +336,17 @@ const server = http.createServer(async (req, res) => {
 
     return json(res, 404, { error: 'not found' });
   } catch (e) {
+    if (res.headersSent) return res.destroy();
     return json(res, 400, { error: e.message || 'bad request' });
   }
 });
 
 load();
 setInterval(sweep, 10 * 60 * 1000).unref();
+// Polls only touch lastActive; flush those at most a minute late, and on shutdown —
+// systemd sends SIGTERM on every restart, which is every deploy.
+setInterval(() => { if (dirty) save(); }, 60 * 1000).unref();
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, () => { if (dirty) save(); process.exit(0); });
+}
 server.listen(PORT, HOST, () => console.log(`turbolink on http://${HOST}:${PORT}`));

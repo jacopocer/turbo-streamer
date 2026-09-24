@@ -7,7 +7,7 @@
 logLevel: info
 logDestinations: [stdout]
 
-api: yes
+api: no
 apiAddress: 127.0.0.1:9997
 metrics: no
 pprof: no
