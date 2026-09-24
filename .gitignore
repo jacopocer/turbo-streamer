@@ -26,3 +26,9 @@ receiver/vendor/
 
 # turbo-net helper binary (built by net/build-net.sh)
 net/bin/
+
+# deploy-apps.sh --dry-run output
+.deploy-dry-run/
+
+# NDI SDK installed on this Mac (written by receiver/ndi/ndi-sdk.sh)
+receiver/ndi/.ndi-sdk-installed
