@@ -441,12 +441,13 @@ struct StreamStatus {
     var currentDiagnostic: Diagnostic?   // plain-language translation of the latest failure (nil = all good)
     var transportWarning: String?  // set when the transport fell back (e.g. relay SRT blocked → RTMP)
     var slowSamples = 0           // consecutive progress lines with speed < 0.95x (encoder falling behind)
+    var lastFrame = 0             // frame counter of the current ffmpeg run (reset at every launch)
 
     // Themed badge text for the freeze / black content detectors (Topolino voice).
     static let frozenBadge = "Pippo si è freezato, prova a dargli una botta!"
     static let blackBadge  = "Non si vede niente, stai forse rubando lo stipendio?"
 
-    /// True if a progress line was seen in this batch (used by the hang watchdog).
+    /// True if frames advanced in this batch (used by the hang watchdog).
     @discardableResult
     mutating func appendLog(_ text: String) -> Bool {
         let incoming = text
@@ -460,7 +461,13 @@ struct StreamStatus {
         var firstIssue: Diagnostic? = nil
         for line in incoming {
             if line.contains("frame=") && line.contains("fps=") {
-                sawProgress = true
+                // Only a counter that moves is a sign of life: with the input stalled,
+                // ffmpeg keeps printing this line every 0.5 s with the same frame number,
+                // and counting the line itself kept the hang watchdog from ever firing.
+                if let f = Self.value(after: "frame=", in: line).flatMap({ Int($0) }), f > lastFrame {
+                    lastFrame = f
+                    sawProgress = true
+                }
                 if let v = Self.value(after: "fps=",     in: line) { liveFPS     = v }
                 if let v = Self.value(after: "bitrate=", in: line) { liveBitrate = v }
                 if let v = Self.value(after: "speed=",   in: line) { liveSpeed   = v }

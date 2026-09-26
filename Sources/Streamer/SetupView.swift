@@ -113,7 +113,7 @@ struct SetupView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .disabled(validationHint != nil)
+                .disabled(validationHint != nil || allLive)
                 .keyboardShortcut(.return, modifiers: .command)
             }
             .padding(.horizontal, 20)
@@ -388,6 +388,12 @@ struct SetupView: View {
             .controlSize(.small)
             .background(streamCount == n ? Color.accentColor.opacity(0.2) : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 5))
+    }
+
+    /// Every configured stream is already on air: Start would launch nothing.
+    private var allLive: Bool {
+        let live = manager.liveConfigIDs
+        return !manager.configs.isEmpty && manager.configs.allSatisfy { live.contains($0.id) }
     }
 
     private var validationHint: String? {

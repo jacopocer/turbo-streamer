@@ -264,8 +264,16 @@ final class StreamManager: ObservableObject {
             localServer.setPaths(configs.map { (localPathName(for: $0), $0.name) })
             if !localServer.isRunning { localServer.start() }
         }
-        for config in configs { launch(config, at: now, timestamp: timestamp) }
-        refreshPowerAssertion()   // keep the Mac awake while live
+        // A config already on air (or still in its pre-flight) is not launched again:
+        // pressing Start mid-show used to put a second publisher on the same key.
+        let live = liveConfigIDs
+        for config in configs where !live.contains(config.id) { launch(config, at: now, timestamp: timestamp) }
+    }
+
+    /// Configs with a stream task still running (pre-flight included): launched and not
+    /// stopped. The reconnect loop only ends on a stop, so this is exact.
+    var liveConfigIDs: Set<UUID> {
+        Set(runningStreams.filter { stopFlags[$0.id] == false }.map { $0.config.id })
     }
 
     /// Starts one config as a new running instance. Shared by startStreams and by a
@@ -667,23 +675,27 @@ final class StreamManager: ObservableObject {
 
                 attempt += 1
                 statuses[id]?.phase = attempt == 1 ? .running : .reconnecting(attempt: attempt)
+                // Here, not in startStreams: there every new stream is still .idle (the
+                // task hasn't run yet), so the wake-lock was never taken on a fresh Start.
+                refreshPowerAssertion()
                 let bitrate = "\(currentKbps)k"
                 appendLog("▶ Starting (attempt \(attempt)) at \(bitrate)…", to: id)
 
                 let startedAt = Date()
                 lastProgressAt[id] = Date()
                 framesSeenThisRun.remove(id)
+                statuses[id]?.lastFrame = 0          // each ffmpeg counts from zero
                 let exitCode = await runFFmpeg(record: record, bitrate: bitrate)
                 let ranFor   = Date().timeIntervalSince(startedAt)
                 let connected = framesSeenThisRun.contains(id)
 
                 if Task.isCancelled || stopFlags[id] == true { break }
 
-                if exitCode == 0 {
-                    appendLog("✓ Stream ended cleanly.", to: id)
-                    statuses[id]?.phase = .stopped
-                    break
-                }
+                // Exit 0 is not "done": a stop by the user has already left the loop above,
+                // and a file input loops forever. ffmpeg exits 0 when a network source
+                // closes or resets, and treating that as the end left the stream off air
+                // for good — no reconnect, no alert, no slate.
+                let sourceEnded = exitCode == 0
 
                 // ── Adaptive bitrate ────────────────────────────────────────
                 // Only a run that actually pushed frames says anything about the link. A
@@ -693,6 +705,8 @@ final class StreamManager: ObservableObject {
                 if record.config.adaptiveBitrate {
                     if !connected {
                         appendLog("↻ Connection not established — bitrate stays at \(currentKbps)k.", to: id)
+                    } else if sourceEnded {
+                        // The input went away; the uplink said nothing — bitrate stays.
                     } else if ranFor < 20, currentKbps > Self.floorKbps(originalKbps) {
                         currentKbps = max(Self.floorKbps(originalKbps), currentKbps * 7 / 10)
                         appendLog("📉 Unstable — lowering bitrate to \(currentKbps)k.", to: id)
@@ -707,7 +721,9 @@ final class StreamManager: ObservableObject {
                 let delay = Self.backoffDelay(consecutiveFailures)
 
                 statuses[id]?.phase = .reconnecting(attempt: attempt + 1)
-                appendLog("⚠ Disconnected (exit \(exitCode)) — reconnecting in \(delay) s…", to: id)
+                appendLog(sourceEnded
+                    ? "⚠ The source ended — reconnecting in \(delay) s…"
+                    : "⚠ Disconnected (exit \(exitCode)) — reconnecting in \(delay) s…", to: id)
                 playAlert("Basso")
                 if ranFor > Self.healthyRunSeconds {   // a healthy stream dropped (not initial-connect retries)
                     streamDropped(id: id, name: record.config.name)
@@ -1542,17 +1558,19 @@ final class StreamManager: ObservableObject {
     func setLocalPublish(_ on: Bool) {
         guard on != localPublishEnabled else { return }
         localPublishEnabled = on
-        let liveConfigs = runningStreams.filter { statuses[$0.id]?.phase.isActive == true }.map { $0.config }
+        let liveRecords = runningStreams.filter { statuses[$0.id]?.phase.isActive == true }
         if on {
             localServer.setPaths(configs.map { (localPathName(for: $0), $0.name) })
             localServer.start()
         }
-        // Restart live streams to pick up (or drop) the local destination.
-        for c in liveConfigs { stopStream(id: c.id) }
-        if !liveConfigs.isEmpty {
+        // Restart live streams to pick up (or drop) the local destination. Stopped by the
+        // run's id, which is what stopStream is keyed by — the config's id stopped nothing,
+        // and every live stream ended up running twice on the same key.
+        for r in liveRecords { stopStream(id: r.id) }
+        if !liveRecords.isEmpty {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
                 guard let self else { return }
-                for c in liveConfigs { self.launch(c) }
+                for r in liveRecords { self.launch(r.config) }
             }
         }
         if !on { localServer.stop() }

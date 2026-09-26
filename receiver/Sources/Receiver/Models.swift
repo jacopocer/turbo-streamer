@@ -34,6 +34,9 @@ struct IngestKey: Identifiable, Codable, Equatable {
         relaySource     = (try? c.decode(String.self, forKey: .relaySource)) ?? ""
         relaySourceRTMP = (try? c.decode(String.self, forKey: .relaySourceRTMP)) ?? ""
         pullFromRelay   = (try? c.decode(Bool.self,   forKey: .pullFromRelay)) ?? false
+        // Encoded all along but never read back: after a relaunch a linked feed lost its
+        // code, stopped following the streamer and fell into the legacy relay pull.
+        linkCode        = (try? c.decode(String.self, forKey: .linkCode)) ?? ""
     }
 }
 
