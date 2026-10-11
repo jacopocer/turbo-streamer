@@ -7,11 +7,15 @@
 # Also refreshes turbolink's code + unit, so the token is actually read and the
 # key/appcast endpoints exist. Server work is the owner's to authorize.
 set -euo pipefail
+# Installation values (host, domain, …) come from the git-ignored turbo.config at
+# the repo root — see turbo.config.example.
+CONFIG="$(cd "$(dirname "$0")/../.." && pwd)/turbo.config"
+[ -f "$CONFIG" ] && . "$CONFIG"
 cd "$(dirname "$0")/.."   # link-server/
 
-HOST="${TURBOLINK_DEPLOY_HOST:-root@203.0.113.10}"
+HOST="${TURBOLINK_DEPLOY_HOST:?is not set — see turbo.config.example}"
 SSH_KEY="${TURBOLINK_SSH_KEY:-$HOME/.ssh/id_ed25519}"
-BASE_URL="${TURBOLINK_BASE_URL:-https://turbo.example.com}"
+BASE_URL="${TURBOLINK_BASE_URL:?is not set — see turbo.config.example}"
 TAILNET="${TS_TAILNET:--}"
 TAG="${TS_TAG:-tag:turbo}"
 ssh_do() { ssh -i "$SSH_KEY" "$HOST" "$@"; }

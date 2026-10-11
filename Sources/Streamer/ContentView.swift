@@ -34,7 +34,7 @@ struct ContentView: View {
                 liveBadge
             }
 
-            // Example logo — top right
+            // Optional logo — top right (Resources/header-logo.png, kept out of the repo)
             if let path = Bundle.main.path(forResource: "header-logo", ofType: "png"),
                let img  = NSImage(contentsOfFile: path) {
                 Image(nsImage: img)

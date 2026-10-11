@@ -1,0 +1,18 @@
+# Copy to turbo.config (git-ignored) and fill in. Everything that names a particular
+# installation lives here, never in the code: the apps are built with these values
+# and the deploy scripts read them.
+
+# Where the apps reach turbolink (pairing, transport, relay auth, self-update).
+TURBOLINK_BASE_URL="https://turbo.example.com"
+
+# The Tailscale account operators sign in with, shown in the first-run wizard.
+# Optional: leave empty and the wizard just says "your team's account".
+TURBO_ACCOUNT_HINT=""
+
+# ── Server (deploy scripts) ────────────────────────────────────────────────────
+TURBOLINK_DEPLOY_HOST="root@203.0.113.10"      # ssh target
+TURBOLINK_SSH_KEY="$HOME/.ssh/id_ed25519"
+TURBOLINK_DOMAIN="turbo.example.com"           # turbolink's vhost; also the relay's host name
+TURBOLINK_CERT_EMAIL="you@example.com"         # Let's Encrypt account (deploy.sh)
+# Other sites on the same box that must still answer after a deploy (space-separated).
+TURBOLINK_NEIGHBOUR_URLS=""

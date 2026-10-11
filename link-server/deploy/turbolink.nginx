@@ -1,15 +1,16 @@
+# Template: deploy.sh fills in __TURBOLINK_DOMAIN__ from turbo.config.
 server {
     listen 80;
-    server_name turbo.example.com;
+    server_name __TURBOLINK_DOMAIN__;
     location / { return 301 https://$host$request_uri; }
 }
 
 server {
     listen 443 ssl http2;
-    server_name turbo.example.com;
+    server_name __TURBOLINK_DOMAIN__;
 
-    ssl_certificate     /etc/letsencrypt/live/turbo.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/turbo.example.com/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/__TURBOLINK_DOMAIN__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__TURBOLINK_DOMAIN__/privkey.pem;
 
     # Pairing payloads are tiny; cap the body and rate-limit code guessing.
     client_max_body_size 32k;

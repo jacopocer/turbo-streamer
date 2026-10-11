@@ -4,7 +4,11 @@ import SwiftUI
 struct ReceiverApp: App {
     @StateObject private var server = ServerManager()
 
-    init() { FontLoader.loadBundledFonts() }
+    init() {
+        // Before anything reads preferences (the server's feeds, the onboarding flag).
+        PreferencesMigration.adoptPreviousDomain()
+        FontLoader.loadBundledFonts()
+    }
 
     var body: some Scene {
         WindowGroup("Turbo Receiver") {

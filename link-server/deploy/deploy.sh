@@ -3,21 +3,30 @@
 #
 # Server work is the owner's to authorize — run this only when he explicitly
 # asks for this deploy. It installs a NEW service (/opt/turbolink, port 8814,
-# turbo.example.com) and touches nothing that already runs on the box.
+# TURBOLINK_DOMAIN) and touches nothing that already runs on the box.
 set -euo pipefail
+# Installation values (host, domain, …) come from the git-ignored turbo.config at
+# the repo root — see turbo.config.example.
+CONFIG="$(cd "$(dirname "$0")/../.." && pwd)/turbo.config"
+[ -f "$CONFIG" ] && . "$CONFIG"
 cd "$(dirname "$0")/.."
 
-HOST="${TURBOLINK_DEPLOY_HOST:-root@203.0.113.10}"
+HOST="${TURBOLINK_DEPLOY_HOST:?is not set — see turbo.config.example}"
 SSH_KEY="${TURBOLINK_SSH_KEY:-$HOME/.ssh/id_ed25519}"
-DOMAIN="${TURBOLINK_DOMAIN:-turbo.example.com}"
+DOMAIN="${TURBOLINK_DOMAIN:?is not set — see turbo.config.example}"
+CERT_EMAIL="${TURBOLINK_CERT_EMAIL:?is not set — see turbo.config.example}"
 ssh_do() { ssh -i "$SSH_KEY" "$HOST" "$@"; }
+WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+render() { sed "s|__TURBOLINK_DOMAIN__|$DOMAIN|g" "$1" > "$2"; }
+render deploy/turbolink-api.service "$WORK/turbolink-api.service"
+render deploy/turbolink.nginx       "$WORK/turbolink.nginx"
 
 echo "== turbolink deploy → $HOST ($DOMAIN) =="
 
 ssh_do "mkdir -p /opt/turbolink/api /opt/turbolink/data"
 scp -i "$SSH_KEY" index.js "$HOST:/opt/turbolink/api/index.js"
-scp -i "$SSH_KEY" deploy/turbolink-api.service "$HOST:/etc/systemd/system/turbolink-api.service"
-scp -i "$SSH_KEY" deploy/turbolink.nginx "$HOST:/tmp/turbolink.nginx"
+scp -i "$SSH_KEY" "$WORK/turbolink-api.service" "$HOST:/etc/systemd/system/turbolink-api.service"
+scp -i "$SSH_KEY" "$WORK/turbolink.nginx" "$HOST:/tmp/turbolink.nginx"
 
 ssh_do "chown -R www-data:www-data /opt/turbolink && chmod 700 /opt/turbolink/data"
 # Rate-limit zone as its own file in conf.d (included inside the http block).
@@ -37,7 +46,7 @@ server {
 HTTPONLY"
     ssh_do "ln -sf /etc/nginx/sites-available/turbolink /etc/nginx/sites-enabled/turbolink"
     ssh_do "nginx -t && systemctl reload nginx"
-    ssh_do "certbot certonly --nginx -d $DOMAIN --non-interactive --agree-tos -m jacopocerati@gmail.com"
+    ssh_do "certbot certonly --nginx -d $DOMAIN --non-interactive --agree-tos -m $CERT_EMAIL"
 fi
 
 # Now the certificate exists: install the real vhost.

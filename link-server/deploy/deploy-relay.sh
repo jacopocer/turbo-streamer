@@ -8,19 +8,26 @@
 # TCP 1935 opened in the host firewall) and restarts turbolink-api. Nothing
 # else on the box is touched; nginx is not reloaded.
 set -euo pipefail
+# Installation values (host, domain, …) come from the git-ignored turbo.config at
+# the repo root — see turbo.config.example.
+CONFIG="$(cd "$(dirname "$0")/../.." && pwd)/turbo.config"
+[ -f "$CONFIG" ] && . "$CONFIG"
 cd "$(dirname "$0")/.."
 
-HOST="${TURBOLINK_DEPLOY_HOST:-root@203.0.113.10}"
+HOST="${TURBOLINK_DEPLOY_HOST:?is not set — see turbo.config.example}"
 SSH_KEY="${TURBOLINK_SSH_KEY:-$HOME/.ssh/id_ed25519}"
+DOMAIN="${TURBOLINK_DOMAIN:?is not set — see turbo.config.example}"
 MTX_VERSION="${MTX_VERSION:-v1.21.0}"     # same as receiver/vendor
 MTX_URL="https://github.com/bluenviron/mediamtx/releases/download/${MTX_VERSION}/mediamtx_${MTX_VERSION}_linux_amd64.tar.gz"
 ssh_do() { ssh -i "$SSH_KEY" "$HOST" "$@"; }
+WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+sed "s|__TURBOLINK_DOMAIN__|$DOMAIN|g" deploy/turbolink-api.service > "$WORK/turbolink-api.service"
 
 echo "== turborelay deploy → $HOST (MediaMTX $MTX_VERSION) =="
 
 # turbolink first: the relay's auth calls land on it.
 scp -i "$SSH_KEY" index.js "$HOST:/opt/turbolink/api/index.js"
-scp -i "$SSH_KEY" deploy/turbolink-api.service "$HOST:/etc/systemd/system/turbolink-api.service"
+scp -i "$SSH_KEY" "$WORK/turbolink-api.service" "$HOST:/etc/systemd/system/turbolink-api.service"
 ssh_do "chown www-data:www-data /opt/turbolink/api/index.js"
 
 # The binary: fetched on the box from the pinned release, only when missing or
@@ -40,12 +47,13 @@ ssh_do "systemctl daemon-reload && systemctl restart turbolink-api && systemctl 
 sleep 2
 echo "== health =="
 ssh_do "systemctl is-active turbolink-api turborelay && curl -fsS http://127.0.0.1:8814/health && echo && ss -lun | grep -q ':8890 ' && echo 'SRT listener up' && ss -ltn | grep -q ':1935 ' && echo 'RTMP listener up'"
-curl -fsS "https://turbo.example.com/health" && echo
-# Closing the circle for the neighbours (asked by the neighbour session): the
-# turbolink restart and the ufw change must leave neighbour-api untouched.
-echo "== neighbours =="
-ssh_do "curl -fsS -m 5 http://127.0.0.1:8789/api/health && echo ' neighbour-api OK'"
-for u in https://example.tv https://neighbour.example.com; do
-    printf '%s → %s\n' "$u" "$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$u")"
-done
+curl -fsS "https://$DOMAIN/health" && echo
+# The box is shared: the turbolink restart and the ufw change must leave the other
+# sites answering. Checked from outside, through their public addresses.
+if [ -n "${TURBOLINK_NEIGHBOUR_URLS:-}" ]; then
+    echo "== neighbours =="
+    for u in $TURBOLINK_NEIGHBOUR_URLS; do
+        printf '%s → %s\n' "$u" "$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$u")"
+    done
+fi
 echo "== done =="

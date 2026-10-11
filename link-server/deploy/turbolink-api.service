@@ -12,7 +12,8 @@ Environment=PORT=8814
 Environment=HOST=127.0.0.1
 Environment=TURBOLINK_DATA=/opt/turbolink/data
 Environment=NODE_ENV=production
-Environment=RELAY_HOST=turbo.example.com
+# __TURBOLINK_DOMAIN__ is filled in by the deploy scripts from turbo.config.
+Environment=RELAY_HOST=__TURBOLINK_DOMAIN__
 Environment=RELAY_SRT_PORT=8890
 Environment=RELAY_RTMP_PORT=1935
 Environment=RELAY_LATENCY_MS=200

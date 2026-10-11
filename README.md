@@ -154,17 +154,23 @@ Resources/
 
 ### 3. Add your logo *(optional)*
 
-Place a `header-logo.png` (or your own logo PNG) in `Resources/`. It will appear in the top-right corner of the app header.
+Place your logo as `Resources/header-logo.png` (git-ignored). It appears in the top-right corner of the app header; without it the header simply has no logo.
 
-If you don't want a logo, remove the relevant block from `Sources/Streamer/ContentView.swift`.
+### 4. Configure your installation
 
-### 4. Install ffmpeg
+Everything that names a particular installation — turbolink's address, the account operators sign in with, the server to deploy to — lives in `turbo.config`, which is git-ignored. The build refuses to run without it:
+
+```bash
+cp turbo.config.example turbo.config   # then fill it in
+```
+
+### 5. Install ffmpeg
 
 ```bash
 brew install ffmpeg
 ```
 
-### 5. Build
+### 6. Build
 
 **Standard build (Apple Silicon):**
 
@@ -261,7 +267,7 @@ turbo-streamer/
 │   └── StreamStatusCard.swift   # Per-stream status card with live log
 ├── Resources/
 │   ├── AppIcon.icns
-│   ├── header-logo.png       # Header logo (not tracked, add your own)
+│   ├── header-logo.png          # Header logo (git-ignored, add your own)
 │   └── Fonts/                   # Not tracked — add licensed fonts here
 ├── scripts/
 │   └── setup-decklink-ffmpeg.sh # Builds a DeckLink-enabled ffmpeg

@@ -70,8 +70,9 @@ struct OnboardingView: View {
     let blurb: String
     let done: () -> Void
 
-    /// The account both apps must sign in to — same tailnet on every machine.
-    private let account = "team@example.com"
+    /// The account both apps must sign in to — same tailnet on every machine. Stamped
+    /// into Info.plist at build time from turbo.config (TURBO_ACCOUNT_HINT); may be empty.
+    private let account = Bundle.main.object(forInfoDictionaryKey: "TurboAccountHint") as? String ?? ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -92,9 +93,13 @@ struct OnboardingView: View {
 
             HStack(spacing: 6) {
                 Image(systemName: "person.crop.circle").foregroundStyle(.orange)
-                Text("Sign in with this account, on every machine:").font(.system(size: 12))
-                Text(account).font(.system(size: 12, weight: .semibold, design: .monospaced))
-                    .textSelection(.enabled).foregroundStyle(.orange)
+                if account.isEmpty {
+                    Text("Sign in with your team's account — the same one on every machine.").font(.system(size: 12))
+                } else {
+                    Text("Sign in with this account, on every machine:").font(.system(size: 12))
+                    Text(account).font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .textSelection(.enabled).foregroundStyle(.orange)
+                }
             }
             .padding(10)
             .background(Color.orange.opacity(0.12))
@@ -133,7 +138,7 @@ struct OnboardingView: View {
                 Text("Connecting…").font(.system(size: 12)).foregroundStyle(.secondary)
             case .needsLogin:
                 Image(systemName: "person.crop.circle.badge.exclamationmark").foregroundStyle(.orange)
-                Text("Click “Open login page”, then sign in with \(account). It's remembered afterwards.")
+                Text("Click “Open login page”, then sign in with \(account.isEmpty ? "your team's account" : account). It's remembered afterwards.")
                     .font(.system(size: 12)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             case .up:

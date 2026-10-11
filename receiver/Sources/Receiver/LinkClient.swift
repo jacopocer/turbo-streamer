@@ -3,7 +3,8 @@ import Foundation
 /// Client for the turbolink rendezvous. It exchanges connection coordinates only:
 /// the stream itself never goes near the server.
 enum LinkClient {
-    static let defaultBase = "https://turbo.example.com"
+    /// Stamped into Info.plist at build time from turbo.config (TURBOLINK_BASE_URL).
+    static let defaultBase = Bundle.main.object(forInfoDictionaryKey: "TurboLinkBase") as? String ?? ""
 
     /// Overridable so the service can be pointed at a local instance while testing.
     static var baseURL: String {

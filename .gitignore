@@ -32,3 +32,7 @@ net/bin/
 
 # NDI SDK installed on this Mac (written by receiver/ndi/ndi-sdk.sh)
 receiver/ndi/.ndi-sdk-installed
+
+# Installation values (hosts, accounts) and the header logo — never in the repo
+turbo.config
+Resources/header-logo.png

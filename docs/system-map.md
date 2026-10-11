@@ -76,7 +76,7 @@ Persistenza: `sessions.json` riscritto per intero a ogni mutazione; TTL 24 h dal
 
 ### F1 — Avvio dell'app: onboarding, Turbo network, controllo aggiornamenti
 
-**Osservabile.** Al primo avvio compare il foglio "Welcome" con l'account di riferimento `team@example.com` e lo stato della rete; ai successivi no. In alto, l'header mostra lo stato del nodo Tailscale (Streamer: pulsante nella sub-header; Receiver: badge nell'header). Se il server ha pubblicato una build più nuova, appare un banner blu "Update available".
+**Osservabile.** Al primo avvio compare il foglio "Welcome" con l'account di riferimento (`TURBO_ACCOUNT_HINT` in turbo.config) e lo stato della rete; ai successivi no. In alto, l'header mostra lo stato del nodo Tailscale (Streamer: pulsante nella sub-header; Receiver: badge nell'header). Se il server ha pubblicato una build più nuova, appare un banner blu "Update available".
 
 **Stati UI.** `TurboNet.State`: `off → starting → up | needsLogin(url) | failed(msg)` (`TurboNet.swift:11-13`). `Updater.State`: `idle → checking → upToDate | available(r) → downloading → installing | failed` (`Updater.swift:17-23`). Onboarding: `didOnboard` in `@AppStorage`.
 
@@ -315,4 +315,4 @@ Nessuno di questi è stato corretto in questa review, come richiesto.
 | Footer "v3.0 (build N)" e banner update | l'update finisce in `/Applications` anche se l'app non gira da lì (B3) |
 | Log "✓ Encoder: HEVC…" | l'uscita RTMP usa H.264 (B5) |
 | "Fallback on input loss: holds the most recent frame" | vero; ma lo slate è sempre x264 anche su uno stream HEVC/SRT |
-| Wizard: "Sign in with team@example.com" | con il token sul server non serve alcun login: il wizard mostra comunque il riquadro |
+| Wizard: "Sign in with <account di riferimento>" | con il token sul server non serve alcun login: il wizard mostra comunque il riquadro |

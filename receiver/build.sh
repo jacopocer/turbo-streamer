@@ -5,6 +5,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Installation values (turbolink's address, the wizard's account) come from
+# turbo.config, which is git-ignored — see turbo.config.example.
+CONFIG="$(pwd)/../turbo.config"
+[ -f "$CONFIG" ] && . "$CONFIG"
+: "${TURBOLINK_BASE_URL:?is not set — copy turbo.config.example to turbo.config and fill it in}"
+
 APP_NAME="Receiver"
 BUNDLE="Turbo Receiver.app"
 BUILD_DIR=".build/release"
@@ -102,7 +108,7 @@ cat > "$BUNDLE/Contents/Info.plist" <<PLIST
 <dict>
     <key>CFBundleName</key><string>Turbo Receiver</string>
     <key>CFBundleDisplayName</key><string>Turbo Receiver</string>
-    <key>CFBundleIdentifier</key><string>com.example.turboreceiver</string>
+    <key>CFBundleIdentifier</key><string>com.jacopocerati.turboreceiver</string>
     <key>CFBundleExecutable</key><string>${APP_NAME}</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>__SHORT__</string>
@@ -122,6 +128,9 @@ PLIST
 SHORT_VERSION="$(cat ../VERSION 2>/dev/null || echo 3.0)"
 BUILD_NUMBER="$(git -C .. rev-list --count HEAD 2>/dev/null || echo 0)"
 /usr/bin/sed -i '' "s/__SHORT__/$SHORT_VERSION/; s/__BUILD__/$BUILD_NUMBER/" "$BUNDLE/Contents/Info.plist"
+# The installation's turbolink address and account, read by LinkClient / the wizard.
+/usr/bin/plutil -replace TurboLinkBase    -string "$TURBOLINK_BASE_URL"     "$BUNDLE/Contents/Info.plist"
+/usr/bin/plutil -replace TurboAccountHint -string "${TURBO_ACCOUNT_HINT:-}" "$BUNDLE/Contents/Info.plist"
 echo "🏷  Version $SHORT_VERSION (build $BUILD_NUMBER)"
 
 echo "✍️   Code-signing (ad-hoc)…"

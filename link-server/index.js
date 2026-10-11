@@ -43,11 +43,12 @@ const TS = {
 };
 
 const RELAY = {
-  host: process.env.RELAY_HOST || 'turbo.example.com',
+  host: process.env.RELAY_HOST || '',          // the turbolink domain; unset = no relay offered
   srtPort: Number(process.env.RELAY_SRT_PORT || 8890),
   rtmpPort: Number(process.env.RELAY_RTMP_PORT || 1935),
   latencyMs: Number(process.env.RELAY_LATENCY_MS || 200),   // internet-grade SRT buffer
 };
+if (!RELAY.host) console.warn('RELAY_HOST is not set: sessions are created without the relay');
 
 // code: unambiguous alphabet (no 0/O/1/I) so it can be read aloud
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -63,6 +64,7 @@ let sessions = new Map();
 // key for SRT, and "url/key" for RTMP); a receiver points a MediaMTX path source
 // at the read URL.
 function relayForStreamer(s) {
+  if (!RELAY.host) return null;
   return {
     host: RELAY.host, srtPort: RELAY.srtPort, rtmpPort: RELAY.rtmpPort, path: s.code,
     latencyMs: RELAY.latencyMs,
@@ -73,6 +75,7 @@ function relayForStreamer(s) {
   };
 }
 function relayForReceiver(s) {
+  if (!RELAY.host) return null;
   return {
     host: RELAY.host, srtPort: RELAY.srtPort, rtmpPort: RELAY.rtmpPort, path: s.code, latencyMs: RELAY.latencyMs,
     // SRT (UDP) first for latency; RTMP (TCP) is the fallback for networks that block UDP.

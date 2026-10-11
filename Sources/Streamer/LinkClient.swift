@@ -5,7 +5,8 @@ import Foundation
 /// the server; the stream goes straight to each receiver, or through the relay
 /// next to it when the streamer picks "Use relay".
 enum LinkClient {
-    static let defaultBase = "https://turbo.example.com"
+    /// Stamped into Info.plist at build time from turbo.config (TURBOLINK_BASE_URL).
+    static let defaultBase = Bundle.main.object(forInfoDictionaryKey: "TurboLinkBase") as? String ?? ""
 
     /// Overridable so it can be pointed at a local instance while testing.
     static var baseURL: String {

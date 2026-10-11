@@ -70,13 +70,13 @@ PORT=8814 TURBOLINK_DATA=./data node index.js
 ## Deploy
 
 `deploy/deploy.sh` — new service on the production box: `/opt/turbolink`, port
-**8814**, `turbo.example.com`.
+**8814**, at `TURBOLINK_DOMAIN` (all installation values come from the git-ignored
+`turbo.config` at the repo root — see `turbo.config.example`).
 
-Port 8814 was picked against the ecosystem's own allocation table in
-`~/coordination/STATE.md`, not guessed: 3000/3100, 8787-8793 and
-8811-8813 are taken, 8794-8800 is the reserved boot-check band and 8801-8810 the
-dev-server band, so 8814 is the first free service port. Per that protocol it
-must be **declared on SYNC.md and verified free on the box** before the first
-deploy. An earlier draft of this service used 8791, which is neighbour
-staging's live traffic — the neighbour session caught it. It adds a systemd unit and an nginx site and touches
+Port 8814 was picked against the box's existing port allocations, not guessed:
+3000/3100, 8787-8793 and 8811-8813 were taken, 8794-8800 is a reserved
+boot-check band and 8801-8810 a dev-server band, so 8814 was the first free
+service port. On a shared box, verify it is free before the first deploy: an
+earlier draft of this service used 8791, which another service there was
+already serving live traffic on. It adds a systemd unit and an nginx site and touches
 nothing already running. **Server work is authorized per run by the owner.**
